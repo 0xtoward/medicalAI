@@ -30,3 +30,6 @@ env/
 # 系统
 .DS_Store
 Thumbs.db
+
+# draft 内浏览器缓存（不提交）
+draft/.browser_data/

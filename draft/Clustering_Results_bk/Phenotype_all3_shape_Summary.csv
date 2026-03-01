@@ -1,0 +1,4 @@
+Subtype,Count,Ratio,Fail_Rate(Y=1),Normal_Rate(Y=2),Cure_Rate(Y=3),Base_Sex_Mean,Base_Age_Mean,Base_Height_Mean,Base_Weight_Mean,Base_BMI_Mean,Base_Exophthalmos_Mean,Base_ThyroidW_Mean,Base_RAI3d_Mean,Base_TreatCount_Mean,Base_TGAb_Mean,Base_TPOAb_Mean,Base_TRAb_Mean,Base_Uptake24h_Mean,Base_MaxUptake_Mean,Base_HalfLife_Mean,Base_Dose_Mean
+0,95,13.6%,87.4%,4.2%,8.4%,0.2,40.48,1.62,61.32,22.68,1.13,57.23,4.27,1.06,310.38,394.73,21.5,0.66,0.52,3.53,10.2
+1,365,52.1%,22.7%,24.4%,52.9%,0.25,45.62,1.64,62.06,22.75,1.14,25.88,2.12,1.13,335.99,463.19,14.09,0.93,0.51,3.79,5.47
+2,240,34.3%,24.6%,31.2%,44.2%,0.2,41.11,1.63,60.1,22.2,1.1,35.22,2.67,1.04,248.78,453.58,20.39,1.63,0.48,3.38,6.47

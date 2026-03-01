@@ -15,7 +15,7 @@ import itertools # 用于生成参数组合
 # 1. Config (扩大搜索范围)
 # ==========================================
 class Config:
-    FILE_PATH = "700.xlsx" 
+    FILE_PATH = "1003.xlsx" 
     MAX_EPOCHS = 300
     PATIENCE = 30 
     SEED = 42

@@ -14,7 +14,7 @@ import copy
 # 1. Config
 # ==========================================
 class Config:
-    FILE_PATH = "700.xlsx" 
+    FILE_PATH = "1003.xlsx" 
     BATCH_SIZE = 16  # MLP 参数少，batch size 可以小一点
     MAX_EPOCHS = 300
     PATIENCE = 30 
