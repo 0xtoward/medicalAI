@@ -119,12 +119,25 @@ def main():
     print(f"  接受多次治疗: {len(retreatment)}")
     print(f"  总治疗记录:   {n + sum(len(r['outcomes'])-1 for r in retreatment)}")
 
-    # ========== 各时间点分布 ==========
+    # ========== 各时间点分布（含比例） ==========
     print(f"\n  各时间点状态分布:")
-    print(f"{'':>8} {'甲亢(1)':>8} {'甲减(2)':>8} {'正常(3)':>8} {'缺失':>6}")
+    print(f"  {'时间':>5}  {'甲亢':>6} {'(%)':>7}  {'甲减':>6} {'(%)':>7}  {'正常':>6} {'(%)':>7}  {'缺失':>5}")
+    print(f"  {'─'*62}")
     for t in TIME_LABELS:
         col = eval_seq[t]
-        print(f"  {t:>5} {(col==1).sum():>8} {(col==2).sum():>8} {(col==3).sum():>8} {col.isna().sum():>6}")
+        n_valid = col.notna().sum()
+        n_hyper = (col == 1).sum()
+        n_hypo  = (col == 2).sum()
+        n_norm  = (col == 3).sum()
+        n_miss  = col.isna().sum()
+        if n_valid > 0:
+            print(f"  {t:>5}  {n_hyper:>6} {n_hyper/n_valid:>6.1%}  "
+                  f"{n_hypo:>6} {n_hypo/n_valid:>6.1%}  "
+                  f"{n_norm:>6} {n_norm/n_valid:>6.1%}  {n_miss:>5}")
+        else:
+            print(f"  {t:>5}  {n_hyper:>6}    ---  {n_hypo:>6}    ---  {n_norm:>6}    ---  {n_miss:>5}")
+    print(f"  {'─'*62}")
+    print(f"  * 百分比按该时间点有数据的患者计算")
 
     # ========== 最终结局 ==========
     print(f"\n  最终结局(col14):")
@@ -222,7 +235,12 @@ def main():
     print(f"\n  治疗次数: ", end="")
     print(", ".join(f"{r}次={c}人" for r, c in sorted(rounds_dist.items())))
 
-    print(f"\n  详细列表:")
+    # 详细列表（调用 print_retreatment_details 查看）
+
+
+def print_retreatment_details(retreatment):
+    """打印多次治疗患者的逐条详情（默认不执行，需要时手动调用）"""
+    print(f"\n  多次治疗详细列表:")
     print(f"  {'ID':>8} {'年龄':>4} {'次数':>4}  {'结局变化':<20s}  {'剂量变化'}")
     for p in retreatment:
         o_str = " → ".join(STATUS.get(o, '?') for o in p['outcomes'])

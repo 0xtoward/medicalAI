@@ -33,3 +33,6 @@ Thumbs.db
 
 # draft 内浏览器缓存（不提交）
 draft/.browser_data/
+
+# 大型模型缓存
+*.pkl
