@@ -424,6 +424,25 @@ def compute_binary_metrics(y_true, proba, threshold):
     }
 
 
+def compute_calibration_stats(y_true, proba):
+    """Compute calibration-in-the-large style intercept and slope."""
+    y_true = np.asarray(y_true).astype(int)
+    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    if len(np.unique(y_true)) < 2:
+        return {'intercept': np.nan, 'slope': np.nan}
+
+    logit_p = np.log(proba / (1 - proba)).reshape(-1, 1)
+    try:
+        lr = LogisticRegression(penalty=None, solver='lbfgs', max_iter=2000)
+        lr.fit(logit_p, y_true)
+        return {
+            'intercept': float(lr.intercept_[0]),
+            'slope': float(lr.coef_[0, 0]),
+        }
+    except Exception:
+        return {'intercept': np.nan, 'slope': np.nan}
+
+
 def bootstrap_group_cis(eval_df, threshold, group_col='Patient_ID', n_boot=800):
     """Cluster bootstrap CIs by patient to respect repeated intervals."""
     group_values = eval_df[group_col].dropna().unique()
@@ -432,7 +451,7 @@ def bootstrap_group_cis(eval_df, threshold, group_col='Patient_ID', n_boot=800):
 
     grouped = {g: eval_df.loc[eval_df[group_col] == g] for g in group_values}
     rng = np.random.default_rng(Config.SEED)
-    store = {k: [] for k in ['auc', 'prauc', 'brier', 'recall', 'specificity']}
+    store = {k: [] for k in ['auc', 'prauc', 'brier', 'recall', 'specificity', 'cal_intercept', 'cal_slope']}
 
     for _ in range(n_boot):
         sampled_groups = rng.choice(group_values, size=len(group_values), replace=True)
@@ -441,6 +460,9 @@ def bootstrap_group_cis(eval_df, threshold, group_col='Patient_ID', n_boot=800):
         if len(np.unique(y_boot)) < 2:
             continue
         m = compute_binary_metrics(y_boot, sampled_df['proba'].values, threshold)
+        cal = compute_calibration_stats(y_boot, sampled_df['proba'].values)
+        m['cal_intercept'] = cal['intercept']
+        m['cal_slope'] = cal['slope']
         for key in store:
             if np.isfinite(m[key]):
                 store[key].append(m[key])
@@ -492,6 +514,38 @@ def save_calibration_figure(y_true, proba, title, out_path, n_bins=6):
     plt.close(fig)
 
 
+def save_threshold_sensitivity_figure(y_true, proba, best_thr, title, out_path):
+    """Show how recall/specificity/F1 vary across thresholds."""
+    y_true = np.asarray(y_true).astype(int)
+    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    thresholds = np.arange(0.02, 0.61, 0.01)
+    rows = []
+    for thr in thresholds:
+        m = compute_binary_metrics(y_true, proba, thr)
+        rows.append({
+            'threshold': thr,
+            'recall': m['recall'],
+            'specificity': m['specificity'],
+            'f1': m['f1'],
+        })
+    df = pd.DataFrame(rows)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    ax.plot(df['threshold'], df['recall'], lw=2, label='Recall')
+    ax.plot(df['threshold'], df['specificity'], lw=2, label='Specificity')
+    ax.plot(df['threshold'], df['f1'], lw=2, label='F1')
+    ax.axvline(best_thr, color='black', linestyle='--', alpha=0.7, label=f'Chosen threshold={best_thr:.2f}')
+    ax.set_title(title, fontsize=13)
+    ax.set_xlabel("Threshold")
+    ax.set_ylabel("Metric value")
+    ax.set_ylim(0, 1.02)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+
 def compute_dca(y_true, proba, thresholds=None):
     """Decision curve analysis net benefit."""
     y_true = np.asarray(y_true).astype(int)
@@ -534,7 +588,7 @@ def save_dca_figure(y_true, proba, title, out_path):
     plt.close(fig)
 
 
-def aggregate_patient_level(df_long, proba):
+def aggregate_patient_level(df_long, proba, method='product'):
     """Aggregate interval risks into patient-level 'any relapse during follow-up' risk."""
     tmp = df_long[['Patient_ID', 'Interval_Name', 'Y_Relapse']].copy().reset_index(drop=True)
     tmp['proba'] = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
@@ -542,15 +596,24 @@ def aggregate_patient_level(df_long, proba):
     patient_rows = []
     for pid, g in tmp.groupby('Patient_ID', sort=False):
         probs = g['proba'].values
+        if method == 'product':
+            agg_proba = float(1 - np.prod(1 - probs))
+        elif method == 'max':
+            agg_proba = float(np.max(probs))
+        elif method == 'mean':
+            agg_proba = float(np.mean(probs))
+        else:
+            raise ValueError(f"Unknown aggregation method: {method}")
         patient_rows.append({
             'Patient_ID': pid,
             'Y': int(g['Y_Relapse'].max()),
-            'proba': float(1 - np.prod(1 - probs)),
+            'proba': agg_proba,
             'Max_Interval_Risk': float(np.max(probs)),
             'Mean_Interval_Risk': float(np.mean(probs)),
             'Intervals': int(len(g)),
             'First_Window': g['Interval_Name'].iloc[0],
             'Last_Window': g['Interval_Name'].iloc[-1],
+            'Aggregation': method,
         })
     return pd.DataFrame(patient_rows)
 
@@ -601,6 +664,97 @@ def save_patient_risk_strata(train_patient_df, test_patient_df, out_path):
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
+
+
+def evaluate_patient_aggregation_sensitivity(df_long_train, df_long_test, oof_proba, test_proba):
+    """Compare patient-level conclusions across aggregation rules."""
+    methods = {
+        'Product_AnyRisk': 'product',
+        'Max_Interval_Risk': 'max',
+        'Mean_Interval_Risk': 'mean',
+    }
+    rows = []
+    curves = {}
+    for label, method in methods.items():
+        train_df = aggregate_patient_level(df_long_train, oof_proba, method=method)
+        test_df = aggregate_patient_level(df_long_test, test_proba, method=method)
+        thr = select_best_threshold(train_df['Y'].values, train_df['proba'].values,
+                                    low=0.05, high=0.95, step=0.01)
+        m = compute_binary_metrics(test_df['Y'].values, test_df['proba'].values, thr)
+        cal = compute_calibration_stats(test_df['Y'].values, test_df['proba'].values)
+        rows.append({
+            'Aggregation': label,
+            'Threshold': thr,
+            'AUC': m['auc'],
+            'PR_AUC': m['prauc'],
+            'Brier': m['brier'],
+            'Recall': m['recall'],
+            'Specificity': m['specificity'],
+            'Calibration_Intercept': cal['intercept'],
+            'Calibration_Slope': cal['slope'],
+        })
+        curves[label] = test_df
+    return pd.DataFrame(rows), curves
+
+
+def save_patient_aggregation_sensitivity_figure(summary_df, out_path):
+    """Visualize patient-level aggregation sensitivity."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8))
+    x = np.arange(len(summary_df))
+    labels = summary_df['Aggregation'].tolist()
+
+    axes[0].bar(x - 0.17, summary_df['AUC'], 0.34, label='AUC', color='steelblue')
+    axes[0].bar(x + 0.17, summary_df['PR_AUC'], 0.34, label='PR-AUC', color='coral')
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels, rotation=15, ha='right')
+    axes[0].set_ylim(0, 1.0)
+    axes[0].set_title("Patient-Level Aggregation Sensitivity")
+    axes[0].grid(axis='y', alpha=0.3)
+    axes[0].legend()
+
+    axes[1].bar(x - 0.17, summary_df['Calibration_Intercept'], 0.34, label='Intercept', color='slateblue')
+    axes[1].bar(x + 0.17, summary_df['Calibration_Slope'], 0.34, label='Slope', color='darkorange')
+    axes[1].axhline(0.0, color='gray', linestyle='--', lw=1)
+    axes[1].axhline(1.0, color='gray', linestyle=':', lw=1)
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, rotation=15, ha='right')
+    axes[1].set_title("Calibration Statistics by Aggregation")
+    axes[1].grid(axis='y', alpha=0.3)
+    axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+
+def evaluate_window_sensitivity(df_long_test, proba, threshold):
+    """Check if results depend heavily on specific follow-up windows."""
+    tmp = df_long_test[['Patient_ID', 'Interval_Name', 'Y_Relapse']].copy().reset_index(drop=True)
+    tmp['Y'] = tmp['Y_Relapse'].astype(int)
+    tmp['proba'] = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    scenarios = {
+        'All_Windows': np.ones(len(tmp), dtype=bool),
+        'Exclude_1M_3M': tmp['Interval_Name'].values != '1M->3M',
+        'Exclude_12Mplus': ~tmp['Interval_Name'].isin(['12M->18M', '18M->24M']).values,
+        'Only_3Mplus': tmp['Interval_Name'].isin(['3M->6M', '6M->12M', '12M->18M', '18M->24M']).values,
+    }
+    rows = []
+    for label, mask in scenarios.items():
+        sub = tmp.loc[mask].copy()
+        if len(sub) == 0 or len(np.unique(sub['Y'])) < 2:
+            continue
+        m = compute_binary_metrics(sub['Y'].values, sub['proba'].values, threshold)
+        rows.append({
+            'Scenario': label,
+            'Intervals': len(sub),
+            'Events': int(sub['Y'].sum()),
+            'AUC': m['auc'],
+            'PR_AUC': m['prauc'],
+            'Brier': m['brier'],
+            'Recall': m['recall'],
+            'Specificity': m['specificity'],
+        })
+    return pd.DataFrame(rows)
 
 
 def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
@@ -722,6 +876,7 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     })
     interval_cis = bootstrap_group_cis(interval_eval_df, best_eval['threshold'], group_col='Patient_ID')
     interval_metrics = compute_binary_metrics(y_te, best_eval['proba'], best_eval['threshold'])
+    interval_cal = compute_calibration_stats(y_te, best_eval['proba'])
 
     print(f"\n  Interval-level report on best PR-AUC model: {best_eval_name}")
     print(f"    AUC         = {interval_metrics['auc']:.3f}  95% CI {format_ci(interval_cis, 'auc')}")
@@ -729,6 +884,8 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     print(f"    Brier       = {interval_metrics['brier']:.3f}  95% CI {format_ci(interval_cis, 'brier')}")
     print(f"    Recall      = {interval_metrics['recall']:.3f}  95% CI {format_ci(interval_cis, 'recall')}")
     print(f"    Specificity = {interval_metrics['specificity']:.3f}  95% CI {format_ci(interval_cis, 'specificity')}")
+    print(f"    Cal. Intcp  = {interval_cal['intercept']:.3f}  95% CI {format_ci(interval_cis, 'cal_intercept')}")
+    print(f"    Cal. Slope  = {interval_cal['slope']:.3f}  95% CI {format_ci(interval_cis, 'cal_slope')}")
     print(f"    Threshold   = {interval_metrics['threshold']:.2f}")
 
     # ================= 绘图 1: 多模型 Hazard 曲线对比 =================
@@ -809,6 +966,11 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
         f"Decision Curve Analysis ({best_eval_name}, interval-level)",
         Config.OUT_DIR / "DCA_Interval.png"
     )
+    save_threshold_sensitivity_figure(
+        y_te, best_eval['proba'], best_eval['threshold'],
+        f"Threshold Sensitivity ({best_eval_name}, interval-level)",
+        Config.OUT_DIR / "Threshold_Sensitivity_Interval.png"
+    )
 
     # ================= patient-level 汇总: any relapse during follow-up =================
     patient_tr = aggregate_patient_level(df_long_train, best_eval['oof_proba'])
@@ -817,6 +979,7 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
                                         low=0.05, high=0.95, step=0.01)
     patient_metrics = compute_binary_metrics(patient_te['Y'].values, patient_te['proba'].values, patient_thr)
     patient_cis = bootstrap_group_cis(patient_te, patient_thr, group_col='Patient_ID')
+    patient_cal = compute_calibration_stats(patient_te['Y'].values, patient_te['proba'].values)
 
     print(f"\n  Patient-level report (endpoint: any relapse during follow-up)")
     print(f"    Patients    = train {len(patient_tr)} / test {len(patient_te)}")
@@ -825,6 +988,8 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     print(f"    Brier       = {patient_metrics['brier']:.3f}  95% CI {format_ci(patient_cis, 'brier')}")
     print(f"    Recall      = {patient_metrics['recall']:.3f}  95% CI {format_ci(patient_cis, 'recall')}")
     print(f"    Specificity = {patient_metrics['specificity']:.3f}  95% CI {format_ci(patient_cis, 'specificity')}")
+    print(f"    Cal. Intcp  = {patient_cal['intercept']:.3f}  95% CI {format_ci(patient_cis, 'cal_intercept')}")
+    print(f"    Cal. Slope  = {patient_cal['slope']:.3f}  95% CI {format_ci(patient_cis, 'cal_slope')}")
     print(f"    Threshold   = {patient_thr:.2f}")
 
     save_calibration_figure(
@@ -837,10 +1002,37 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
         f"Decision Curve Analysis ({best_eval_name}, patient-level)",
         Config.OUT_DIR / "DCA_Patient.png"
     )
+    save_threshold_sensitivity_figure(
+        patient_te['Y'].values, patient_te['proba'].values, patient_thr,
+        f"Threshold Sensitivity ({best_eval_name}, patient-level)",
+        Config.OUT_DIR / "Threshold_Sensitivity_Patient.png"
+    )
     save_patient_risk_strata(
         patient_tr, patient_te,
         Config.OUT_DIR / "Patient_Risk_Q1Q4.png"
     )
+
+    # ================= 敏感性分析 1: patient-level 汇总规则 =================
+    patient_sens_df, _ = evaluate_patient_aggregation_sensitivity(
+        df_long_train, df_long_test, best_eval['oof_proba'], best_eval['proba']
+    )
+    print(f"\n  Patient-level aggregation sensitivity")
+    for _, row in patient_sens_df.iterrows():
+        print(f"    {row['Aggregation']:<18s} AUC={row['AUC']:.3f}  PR-AUC={row['PR_AUC']:.3f}  "
+              f"Brier={row['Brier']:.3f}  Recall={row['Recall']:.3f}  Specificity={row['Specificity']:.3f}")
+    patient_sens_df.to_csv(Config.OUT_DIR / "Patient_Aggregation_Sensitivity.csv", index=False)
+    save_patient_aggregation_sensitivity_figure(
+        patient_sens_df,
+        Config.OUT_DIR / "Patient_Aggregation_Sensitivity.png"
+    )
+
+    # ================= 敏感性分析 2: 时间窗口 =================
+    window_sens_df = evaluate_window_sensitivity(df_long_test, best_eval['proba'], best_eval['threshold'])
+    print(f"\n  Window sensitivity (interval-level best model)")
+    for _, row in window_sens_df.iterrows():
+        print(f"    {row['Scenario']:<18s} n={int(row['Intervals'])}  events={int(row['Events'])}  "
+              f"AUC={row['AUC']:.3f}  PR-AUC={row['PR_AUC']:.3f}  Brier={row['Brier']:.3f}")
+    window_sens_df.to_csv(Config.OUT_DIR / "Window_Sensitivity.csv", index=False)
 
     # ================= 绘图 3: SHAP (优先解释 PR-AUC 最优模型) =================
     best_shap_name = best_prauc_name
