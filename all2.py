@@ -1,4 +1,6 @@
-import os
+import warnings
+warnings.filterwarnings("ignore")
+
 import pandas as pd
 import numpy as np
 import torch
@@ -8,13 +10,13 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+from sklearn.impute import IterativeImputer
 import matplotlib.pyplot as plt
 import shap
-import copy
+import joblib
 from pathlib import Path
-import warnings
-warnings.filterwarnings("ignore")
 
 # ==========================================
 # 1. Config & 目录设置
@@ -43,35 +45,48 @@ np.random.seed(Config.SEED)
 # ==========================================
 # 2. 数据处理与特征工程
 # ==========================================
-def robust_impute(seq_df):
-    seq = seq_df.apply(pd.to_numeric, errors='coerce').astype(float)
-    base_med = seq.iloc[:, 0].median()
-    seq.iloc[:, 0] = seq.iloc[:, 0].fillna(base_med if not np.isnan(base_med) else 0)
-    seq = seq.ffill(axis=1)
-    seq = seq.fillna(seq.median(axis=0)).fillna(0)
-    return seq.values
-
-def load_data():
+def load_data_raw():
+    """加载原始数据，不做任何填充（保留 NaN）"""
     df = pd.read_excel(Config.FILE_PATH, header=None, engine='openpyxl').iloc[2:]
     df['Patient_ID'] = df.iloc[:, Config.COL_IDX['ID']].ffill()
-            
-    X_s = df.iloc[:, Config.COL_IDX['Static_Feats']].apply(pd.to_numeric, errors='coerce').fillna(0).values
+
+    X_s = df.iloc[:, Config.COL_IDX['Static_Feats']].apply(pd.to_numeric, errors='coerce').values
     gt = df.iloc[:, 3].astype(str).str.strip()
     gender_vec = np.zeros(len(df), dtype=np.float32)
     gender_vec[(gt == "男") | (gt.str.upper() == "M") | (df.iloc[:, 3] == 1)] = 1.0
-    X_s[:, 0] = gender_vec 
-    
+    X_s[:, 0] = gender_vec
+
     y_raw = df.iloc[:, Config.COL_IDX['Outcome']].apply(pd.to_numeric, errors='coerce')
-    
-    ft3 = robust_impute(df.iloc[:, Config.COL_IDX['FT3_Sequence']])
-    ft4 = robust_impute(df.iloc[:, Config.COL_IDX['FT4_Sequence']])
-    tsh = robust_impute(df.iloc[:, Config.COL_IDX['TSH_Sequence']])
-    X_d = np.stack([ft3, ft4, tsh], axis=-1) 
+
+    ft3 = df.iloc[:, Config.COL_IDX['FT3_Sequence']].apply(pd.to_numeric, errors='coerce').values
+    ft4 = df.iloc[:, Config.COL_IDX['FT4_Sequence']].apply(pd.to_numeric, errors='coerce').values
+    tsh = df.iloc[:, Config.COL_IDX['TSH_Sequence']].apply(pd.to_numeric, errors='coerce').values
 
     valid_idx = y_raw.dropna().index
     take = df.index.get_indexer(valid_idx)
     y = y_raw.loc[valid_idx].map({1: 0, 2: 1, 3: 2}).values.astype(int)
-    return X_s[take], X_d[take], y, df.loc[valid_idx, 'Patient_ID'].values 
+    return X_s[take], ft3[take], ft4[take], tsh[take], y, df.loc[valid_idx, 'Patient_ID'].values
+
+
+def fit_missforest(train_matrix):
+    """Fit IterativeImputer (MissForest) on training data only."""
+    imputer = IterativeImputer(
+        estimator=RandomForestRegressor(n_estimators=50, max_depth=5,
+                                        random_state=Config.SEED, n_jobs=1),
+        max_iter=10, random_state=Config.SEED
+    )
+    imputer.fit(train_matrix)
+    return imputer
+
+
+def split_imputed(arr, n_static, n_seq):
+    """Split imputed matrix back into static + ft3 + ft4 + tsh."""
+    i = 0
+    X_s = arr[:, i:i+n_static];  i += n_static
+    ft3 = arr[:, i:i+n_seq];     i += n_seq
+    ft4 = arr[:, i:i+n_seq];     i += n_seq
+    tsh = arr[:, i:i+n_seq]
+    return X_s, ft3, ft4, tsh
 
 def extract_flat_features(X_s, X_d, seq_len):
     X_d_trunc = X_d[:, :seq_len, :] 
@@ -216,15 +231,45 @@ def plot_shap(cascade_model, X_tr, feat_names, title, filename):
 # 6. 主执行
 # ==========================================
 def run_experiment(landmark_name, seq_len):
-    print(f"\n{'='*105}\n🚀 启动实验: {landmark_name}\n{'='*105}")
-    X_s, X_d, y, pids = load_data()
-    X_all, feat_names = extract_flat_features(X_s, X_d, seq_len)
-    
+    print(f"\n{'='*105}\n  Experiment: {landmark_name}\n{'='*105}")
+    X_s_raw, ft3_raw, ft4_raw, tsh_raw, y, pids = load_data_raw()
+    n_static = X_s_raw.shape[1]
+
+    # --- Step 1: Split FIRST (by patient group) ---
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=Config.SEED)
-    train_idx, test_idx = next(gss.split(X_all, y, groups=pids))
-    
-    scaler = StandardScaler().fit(X_all[train_idx])
-    X_tr, X_te = scaler.transform(X_all[train_idx]), scaler.transform(X_all[test_idx])
+    train_idx, test_idx = next(gss.split(X_s_raw, y, groups=pids))
+
+    # --- Step 2: Temporal-safe MissForest: only columns ≤ seq_len ---
+    ft3_cut = ft3_raw[:, :seq_len]
+    ft4_cut = ft4_raw[:, :seq_len]
+    tsh_cut = tsh_raw[:, :seq_len]
+    raw_all = np.hstack([X_s_raw, ft3_cut, ft4_cut, tsh_cut])
+
+    imputer_path = Config.OUT_DIR / f"missforest_seqlen{seq_len}.pkl"
+    if imputer_path.exists():
+        imputer = joblib.load(imputer_path)
+        print(f"  MissForest (seq≤{seq_len}): loaded from cache")
+    else:
+        print(f"  MissForest (seq≤{seq_len}): fitting on train ({len(train_idx)} samples)...")
+        imputer = fit_missforest(raw_all[train_idx])
+        joblib.dump(imputer, imputer_path)
+        print(f"  MissForest (seq≤{seq_len}): saved to {imputer_path}")
+
+    filled_tr = imputer.transform(raw_all[train_idx])
+    filled_te = imputer.transform(raw_all[test_idx])
+    X_s_tr, ft3_tr, ft4_tr, tsh_tr = split_imputed(filled_tr, n_static, seq_len)
+    X_s_te, ft3_te, ft4_te, tsh_te = split_imputed(filled_te, n_static, seq_len)
+
+    X_d_tr = np.stack([ft3_tr, ft4_tr, tsh_tr], axis=-1)
+    X_d_te = np.stack([ft3_te, ft4_te, tsh_te], axis=-1)
+
+    # --- Step 3: Feature extraction ---
+    X_tr_feat, feat_names = extract_flat_features(X_s_tr, X_d_tr, seq_len)
+    X_te_feat, _          = extract_flat_features(X_s_te, X_d_te, seq_len)
+
+    # --- Step 4: Scale on TRAIN ONLY ---
+    scaler = StandardScaler().fit(X_tr_feat)
+    X_tr, X_te = scaler.transform(X_tr_feat), scaler.transform(X_te_feat)
     y_tr, y_te = y[train_idx], y[test_idx]
     
     # --- 模型 1 & 2: 纯树模型级联 ---

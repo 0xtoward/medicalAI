@@ -1,86 +1,559 @@
-# 甲亢 RAI 治疗后复发预测与因果分析
+# Graves 甲亢 RAI 治疗后复发风险预测项目
 
-基于 1003 例 Graves 甲亢患者放射性碘（RAI）治疗后的纵向随访数据，利用机器学习和因果推断方法，预测治疗后复发风险并识别关键影响因素。
+本项目基于 Graves 甲亢患者接受放射性碘治疗后的纵向随访数据，构建机器学习模型，回答两个彼此相关但临床含义不同的问题：
 
-## 数据概况
+1. 当前这次复诊如果已经恢复到正常，患者在下一次随访时是否会再次复发为甲亢？
+2. 从整个随访过程来看，哪些患者属于未来更可能再次复发的高风险人群？
 
-- **样本量**：889 名患者，1003 条治疗记录（含复诊）
-- **随访时间点**：治疗前(0M)、1M、3M、6M、12M、18M、24M
-- **核心指标**：FT3、FT4、TSH、医生诊断评价（甲亢/正常/甲减）
-- **基线特征**：性别、年龄、身高体重、突眼、甲状腺重量、RAI 3 日摄取率、TGAb、TPOAb、TRAb、剂量等
+README 按论文写作逻辑组织，主要面向医学合作者。内容尽量保持中文叙述，同时保留必要的方法学细节，方便后续直接转化为论文的 `Introduction / Methods / Results / Discussion` 草稿。
 
-## 项目结构
+---
 
-```
-├── multi-state.py          # 主分析：多状态转移 + 9 模型对比 + SHAP 解释
-├── all2.py                 # 3/6 月疗效预测（RF/XGBoost/LightGBM + SHAP）
-├── causal.py               # 因果推断：CausalForestDML 估计 CATE/ATE
-├── cluster.py              # 时间序列聚类（K-Means on TSH/FT3/FT4 轨迹）
-├── draft.md                # 文献阅读笔记
-├── draft/                  # 早期探索脚本（RF、TabPFN、MLP、t-SNE 等）
-│   ├── probe.py            # 患者轨迹分析（复发/甲减/稳定比例）
-│   ├── state1.py           # 状态转移热力图（已合并入 multi-state.py）
-│   └── ...
-├── multistate_result/      # multi-state.py 输出图表
-├── all_result/             # all2.py 输出图表
-├── causal_result/          # causal.py 输出图表
-├── Clustering_Results/     # cluster.py 输出图表
-└── .gitignore
-```
+## 1 研究背景与目标
 
-## 核心分析模块
+RAI 治疗后，患者在随访过程中可能经历甲亢、正常、甲减等不同状态的动态转移。传统静态分析往往只能回答“某一固定时间点能否预测最终结局”，但难以回答临床上更常见的问题：
 
-### 1. 多状态复发预测 (`multi-state.py`)
+- 患者这次复查已经正常，下次会不会又回到甲亢？
+- 哪些患者在未来整个观察期内属于复发高风险，需要更密切随访？
 
-将随访过程建模为 **甲亢 → 正常 → 甲减** 三状态转移系统，预测"当期正常的患者下一期是否复发为甲亢"。
+因此，本项目重点构建一个基于时序随访数据的复发预警模型，并从两个层面报告结果：
 
-**方法要点**：
-- **时序验证**：按患者入组顺序 80/20 划分训练/测试集，杜绝未来信息泄漏
-- **MissForest 填充**：使用 `IterativeImputer`（随机森林）联合填充缺失的实验室值和医生评价标签，仅在训练集上拟合
-- **GroupKFold 调参**：`RandomizedSearchCV` 以患者 ID 分组，防止同一患者跨折泄漏
-- **OOF 阈值选择**：在训练集内部通过 Out-of-Fold 预测最大化 F1 来确定分类阈值
+- `interval-level`：区间层面风险预测
+- `patient-level`：患者层面风险汇总
 
-**9 模型对比**：
+---
 
-| 模型 | 类型 |
+## 2 数据来源与总体概况
+
+当前数据为 RAI 治疗后的纵向真实世界随访数据。按照现有清洗逻辑：
+
+| 项目 | 内容 |
 |---|---|
-| Logistic Regression | 线性（Pipeline + StandardScaler） |
-| Random Forest | 集成-Bagging |
-| AdaBoost | 集成-Boosting |
-| GradientBoosting | 集成-Boosting（调参） |
-| XGBoost | 集成-Boosting（调参） |
-| LightGBM | 集成-Boosting |
-| MLP | 神经网络（Pipeline + StandardScaler） |
-| Cox PH | 生存分析（lifelines） |
-| Stacking Ensemble | 元学习（LR+RF+GBC → LR） |
+| 治疗记录数 | 1003 |
+| 唯一患者数 | 889 |
+| 随访时间点 | 0M、1M、3M、6M、12M、18M、24M |
+| 核心实验室指标 | FT3、FT4、TSH |
+| 临床状态标签 | 医生评价：甲亢 / 正常 / 甲减 |
+| 主要基线变量 | 性别、年龄、身高、体重、BMI、突眼、甲状腺重量、RAI 3 日摄取率、TRAb、TPOAb、TGAb、剂量等 |
 
-**输出**：状态转移热力图、多模型 Hazard 曲线、AUC/PR-AUC 柱状图、SHAP 特征重要性图
+状态编码说明：
 
-### 2. 疗效预测 (`all2.py`)
+- `Hyper`：甲亢
+- `Normal`：正常
+- `Hypo`：甲减
 
-对 3 个月和 6 个月时间点分别建立二分类模型，预测患者是否仍为甲亢状态。使用 RF、XGBoost、LightGBM 三模型对比，输出 ROC 曲线和 SHAP 分析。
+其中 `0M` 定义为治疗前，所有患者默认处于 `Hyper` 状态。
 
-### 3. 因果推断 (`causal.py`)
+---
 
-使用 `econml.CausalForestDML` 估计不同剂量对治疗效果的条件平均处理效应（CATE），识别哪些患者亚群对剂量调整更敏感。输出倾向性得分分布、CATE 象限图、特征重要性图。
+## 3 研究终点与两个分析层级
 
-### 4. 轨迹聚类 (`cluster.py`)
+这一部分非常重要，因为 `interval-level` 和 `patient-level` 不是两个不同模型，而是同一个复发风险模型在两个不同临床视角下的结果表达。
 
-对 TSH/FT3/FT4 时间序列轨迹进行 K-Means 聚类，发现不同恢复模式的患者亚型。输出 3D 散点图、TSH 轨迹面板、疗效堆叠柱状图。
+### 3.1 Interval-level 是什么
 
-## 环境
+`interval-level` 指“随访区间层面”的预测。每一行样本对应：
 
-```bash
-conda activate med  # Python 3.10
-# 主要依赖：pandas, numpy, scikit-learn, xgboost, lightgbm, shap,
-#           matplotlib, seaborn, econml, lifelines, openpyxl
+- 某一位患者
+- 某一个相邻随访区间，如 `1M->3M`、`3M->6M`
+- 且该患者在区间起点时处于 `Normal`
+
+在这个前提下，模型预测的是：
+
+$$
+P(\text{Relapse at } k+1 \mid S_k = \text{Normal}, X_{\le k})
+$$
+
+也就是：
+
+“患者本次复诊已经正常，那么到下一次复诊时，是否会重新回到甲亢状态？”
+
+因此，`interval-level` 适合回答的是：
+
+- 哪个随访窗口风险最高？
+- 当前这次复诊之后，下一次复发风险有多大？
+- 模型对每个相邻时间区间的判别能力和校准能力如何？
+
+本项目中，`interval-level` 最终形成：
+
+- 训练集：`2096` 个区间
+- 测试集：`514` 个区间
+- 测试集复发事件：`41` 个
+
+### 3.2 Patient-level 是什么
+
+`patient-level` 指“患者整体层面”的预测。这里不是看某一个具体区间，而是把一个患者在所有可评估区间上的风险综合起来，形成该患者在观察期内“是否至少发生过一次复发”的总体风险。
+
+本项目定义的 patient-level 终点为：
+
+> 患者在其观察期内是否出现过至少一次 `Normal -> Hyper` 复发。
+
+具体实现上，脚本先得到每个患者各个区间的预测风险 `p1, p2, ..., pk`，再汇总为：
+
+$$
+P(\text{any relapse during follow-up}) = 1 - \prod_{j=1}^{k}(1-p_j)
+$$
+
+临床上可理解为：
+
+“这个患者在后续整个观察期内，至少出现一次复发的总体概率有多大？”
+
+因此，`patient-level` 更适合回答：
+
+- 哪些患者属于未来整体高风险人群？
+- 能否据此做风险分层管理？
+- 是否可以把患者分成低、中、高风险组，用于安排随访频率？
+
+### 3.3 Q1-Q4 是什么，它不是终点
+
+`Q1~Q4` 不是 patient-level 的终点定义，而是 patient-level 预测概率的风险分层方式。
+
+- `patient-level endpoint`：是否在随访期内至少复发一次
+- `Q1~Q4 risk strata`：按照训练集预测概率四分位数，把测试集患者分为 4 个风险组
+
+换句话说：
+
+- 终点回答“有没有复发”
+- Q1~Q4 回答“风险高低分层是否有临床意义”
+
+---
+
+## 4 研究设计与建模思路
+
+### 4.1 总体思路
+
+本项目采用滚动 Landmark 思想，将纵向数据展开为 long format，建立离散时间风险模型。每名患者在每个可评估的相邻随访区间都可以贡献一行样本。
+
+示意如下：
+
+```text
+患者 i，在 k 时点已经正常：
+  使用 <=k 的全部信息
+    ├── 静态基线特征
+    ├── 当前实验室值（FT3 / FT4 / TSH）
+    ├── 相对基线变化（delta vs 0M）
+    ├── 相对上次变化（delta vs k-1）
+    ├── 历史状态记忆（是否曾经甲亢/甲减、正常持续时间等）
+    └── 时间窗口指示变量
+  预测：
+    k -> k+1 是否 Normal -> Hyper
 ```
 
-## 运行
+该框架与文献中的 `Landmark supermodel` 或 `pooled logistic regression` 在思想上是一致的，优点是：
+
+- 能充分利用所有中间随访信息
+- 能显式建模时变特征
+- 能输出不同随访窗口的条件风险
+- 更接近真实临床“边随访边判断风险”的场景
+
+### 4.2 关键预测因子
+
+`repluse.py` 中纳入的核心变量包括：
+
+- 静态变量：性别、年龄、身高、体重、BMI、突眼、甲状腺重量、RAI 摄取、抗体指标、剂量等
+- 当前实验室值：`FT3_Current`、`FT4_Current`、`logTSH_Current`
+- 历史状态特征：`Ever_Hyper_Before`、`Ever_Hypo_Before`、`Time_In_Normal`
+- 动态变化特征：`Delta_FT4_k0`、`Delta_TSH_k0`、`Delta_FT4_1step`、`Delta_TSH_1step`
+- 时间窗口变量：`Window_1M->3M`、`Window_3M->6M` 等
+- 既往状态变量：`PrevState_*`
+
+这些变量共同刻画了一个患者的：
+
+- 基线体质与疾病负担
+- 当前生化状态
+- 与既往相比的变化趋势
+- 已经稳定了多久
+- 当前所在的随访阶段
+
+### 4.3 缺失值处理与时序安全设计
+
+由于纵向随访数据存在较多缺失，本项目采用 MissForest 风格的迭代填充：
+
+- 工具实现：`IterativeImputer + RandomForestRegressor`
+- 原则：只在训练集上 `fit`
+- 关键点：对每个 Landmark 深度单独构建填充器，避免未来时间点信息泄漏到当前时点
+
+例如在预测 `3M->6M` 区间时，填充只允许使用 `<=3M` 的列；不会借用 `12M` 或 `24M` 的未来信息。
+
+### 4.4 数据划分与验证
+
+为尽量接近真实临床时序，本项目采用：
+
+- 按患者入组顺序的 `80/20` 时序切分
+- 训练/测试均以患者为单位
+- 训练阶段采用 `GroupKFold`
+- 分组单位为 `Patient_ID`
+
+这样可以避免同一患者的不同区间同时落入训练折和验证折，减少患者层面的信息泄漏。
+
+### 4.5 模型与调参策略
+
+`repluse.py` 对以下 9 个候选模型进行统一比较：
+
+| 模型 | 说明 |
+|---|---|
+| Logistic Regression | 线性基线模型，便于解释 |
+| Random Forest | Bagging 树模型 |
+| AdaBoost | Boosting 模型 |
+| GradientBoosting | 经典梯度提升树 |
+| XGBoost | 工程化提升树 |
+| LightGBM | 高效提升树 |
+| MLP | 多层感知机 |
+| Cox PH | 比例风险模型包装为 sklearn 风格接口 |
+| Stacking | 由调优后的 LR + RF + GBC 组成 |
+
+统一训练策略：
+
+- `RandomizedSearchCV`
+- `GroupKFold`
+- 调参评分指标为 `PR-AUC`
+- 阈值由训练集 OOF 预测最大化 `F1` 选出
+
+选择 `PR-AUC` 作为主要调参指标，是因为复发事件相对少，属于不平衡分类场景，此时 `PR-AUC` 比单纯 `ACC` 更能反映模型对阳性事件的识别能力。
+
+---
+
+## 5 主要结果
+
+### 5.1 状态转移的描述性结果
+
+状态转移热图显示，在全部相邻随访转移中：
+
+- 总转移次数：`6018`
+- 稳定转移：`4167`
+- `Normal -> Hyper` 复发：`210`
+- `Hypo -> Normal` 恢复：`358`
+
+从时间窗口看，复发主要集中在：
+
+- `1M->3M`
+- `3M->6M`
+- `6M->12M`
+
+提示治疗后早期至中期随访窗口是复发监测的重点阶段。
+
+### 5.2 Interval-level 模型表现
+
+在 `interval-level` 测试集上：
+
+- 测试区间数：`514`
+- 复发事件数：`41`
+
+最佳模型为 `Logistic Regression`：
+
+| 指标 | 数值 |
+|---|---|
+| ROC-AUC | `0.841` |
+| PR-AUC | `0.334` |
+| Accuracy | `0.772` |
+| Balanced Accuracy | `0.732` |
+| Recall | `0.683` |
+| Specificity | `0.780` |
+| Brier score | `0.064` |
+| 阈值 | `0.12` |
+
+95% CI：
+
+- AUC：`0.793–0.890`
+- PR-AUC：`0.214–0.479`
+- Recall：`0.545–0.822`
+- Specificity：`0.747–0.812`
+
+解释上需要注意：
+
+- `ACC` 不是该任务最适合的主指标，因为复发事件较少
+- 本模型更适合被理解为“复发筛查/预警工具”
+- 它追求的是在可接受的假阳性代价下尽量提高复发识别能力
+
+### 5.3 Patient-level 模型表现
+
+在 `patient-level` 汇总后：
+
+- 训练患者数：`626`
+- 测试患者数：`159`
+
+对应终点为“随访期内是否至少复发一次”。结果如下：
+
+| 指标 | 数值 |
+|---|---|
+| ROC-AUC | `0.749` |
+| PR-AUC | `0.453` |
+| Recall | `0.750` |
+| Specificity | `0.593` |
+| Brier score | `0.154` |
+| 阈值 | `0.23` |
+
+95% CI：
+
+- AUC：`0.657–0.835`
+- PR-AUC：`0.324–0.625`
+- Recall：`0.600–0.889`
+- Specificity：`0.512–0.686`
+
+这说明：
+
+- 汇总到患者层面后，模型仍具有中等到良好的风险区分能力
+- patient-level 的临床可读性强于 interval-level
+- 它更适合用于“谁需要更密切随访”的患者管理场景
+
+---
+
+## 6 结果图的推荐解读方式
+
+以下图均来自 `multistate_result/`。
+
+### 6.1 多模型风险曲线：`Hazard_Curve_Strict.png`
+
+该图比较真实复发风险曲线与各模型预测曲线。
+
+建议解读：
+
+- 真实风险总体呈“前高后低”的趋势
+- Logistic 回归能较好追踪这一总体动态
+- 后期低事件率区间存在一定程度的高估，但总体趋势一致
+
+这张图适合用于说明模型不仅有分类能力，还能较好反映不同随访窗口的风险变化规律。
+
+### 6.2 Interval-level 校准图：`Calibration_Interval.png`
+
+该图用于评估“预测概率”和“实际事件率”是否一致。
+
+建议解读：
+
+- 低到中等风险区间的校准较好
+- 大多数预测概率集中在低风险段，符合真实低事件率背景
+- 高风险尾部样本较少，解释时需谨慎
+
+### 6.3 Patient-level 校准图：`Calibration_Patient.png`
+
+建议解读：
+
+- patient-level 整体呈现随预测概率增加而观察事件率升高的趋势
+- 高风险段存在一定波动，提示患者层面仍需更大样本进一步验证
+
+### 6.4 Interval-level DCA：`DCA_Interval.png`
+
+该图评估在不同阈值下，使用模型做决策是否比“全部加密随访”或“全部不加密随访”更有净获益。
+
+建议解读：
+
+- 在较低至中等阈值范围内，模型曲线高于 `treat all` 与 `treat none`
+- 提示 interval-level 模型对“是否需要下次重点监测”具有潜在临床决策价值
+
+### 6.5 Patient-level DCA：`DCA_Patient.png`
+
+建议解读：
+
+- patient-level 曲线在较宽阈值范围内保持正净获益
+- 从临床转化角度看，patient-level DCA 往往比 interval-level 更容易被医学读者接受
+- 这支持模型用于患者风险分层和随访强度分配
+
+### 6.6 Patient-level 风险分层：`Patient_Risk_Q1Q4.png`
+
+该图将患者按训练集预测风险四分位数分为 `Q1-Q4`。
+
+当前结果显示：
+
+- `Q1` 观察复发率约 `8%`
+- `Q2` 约 `16%`
+- `Q3` 约 `21%`
+- `Q4` 约 `43%`
+
+提示模型具有较明确的风险分层能力，可用于将患者区分为低风险、中间风险和高风险人群。
+
+### 6.7 SHAP 解释图：`Hazard_SHAP_Relapse.png`
+
+该图展示最佳模型 `Logistic Regression` 的主要驱动因素。
+
+当前最值得关注的变量包括：
+
+- `Time_In_Normal`
+- `Ever_Hypo_Before`
+- `ThyroidW`
+- `FT3_Current`
+- `Delta_TSH_k0`
+- `logTSH_Current`
+
+初步临床解释为：
+
+- 正常状态维持越久，复发风险越低
+- 既往出现过甲减者，再次回到甲亢的风险可能较低
+- 甲状腺重量较大、当前 FT3 偏高，提示更高复发风险
+- TSH 恢复不足相关特征可能提示更高复发倾向
+
+SHAP 适合用于解释“重要性和总体方向”，但不应直接替代因果结论。
+
+---
+
+## 7 临床上应如何理解这套模型
+
+### 7.1 它不是“最终诊断模型”
+
+该模型更适合被理解为：
+
+- 复发预警工具
+- 随访分层工具
+- 风险沟通工具
+
+而不是：
+
+- 单次复诊时的确定性诊断工具
+
+### 7.2 为什么 Accuracy 不是主卖点
+
+在 `interval-level` 测试集中，复发事件比例较低，因此：
+
+- 即使一个“永远预测不复发”的模型，`ACC` 也可能并不差
+- 但那样的模型对真正需要识别的复发患者没有帮助
+
+因此，本项目更强调：
+
+- `PR-AUC`
+- `Recall`
+- `Brier score`
+- `Calibration`
+- `DCA`
+
+这比单纯看 `ACC` 更符合复发预警任务的临床逻辑。
+
+### 7.3 推荐的临床叙事
+
+如果用于论文或汇报，建议将本模型表述为：
+
+> 一个基于纵向随访数据的 Graves 甲亢 RAI 治疗后复发早期预警模型，可在区间层面识别近期复发风险，并在患者层面实现风险分层，从而为随访频率安排和重点监测对象筛选提供依据。
+
+---
+
+## 8 局限性与当前阶段判断
+
+当前结果已经具备较完整的内部验证表达，包括：
+
+- 区分度
+- 置信区间
+- 校准
+- 决策曲线
+- patient-level 风险分层
+- 模型解释
+
+但仍需在论文中明确以下局限：
+
+1. 目前仍为内部时序验证，尚无独立外部验证数据集。
+2. 测试集阳性事件数有限，部分指标的置信区间仍较宽。
+3. patient-level 高风险段校准存在波动。
+4. interval-level 存在一定假阳性，模型更偏向高召回预警，而非高特异度诊断。
+5. 数据来源、纳入排除标准、流程图和 EPV 论证仍需在正式论文中补足。
+
+因此，现阶段更合适的定位是：
+
+> 可投稿的探索性内部验证研究，而非已完成外部验证的定型临床工具。
+
+---
+
+## 9 相关脚本与模块
+
+本仓库除 `repluse.py` 外，还包含若干相关分析模块：
+
+| 脚本 | 作用 |
+|---|---|
+| `repluse.py` | 复发风险预测主分析，滚动 Landmark，输出 interval-level 与 patient-level 结果 |
+| `all2.py` | 3 月 / 6 月固定 Landmark 的三分类疗效级联预测 |
+| `hyper_detect.py` | 固定 Landmark 下的甲亢 vs 非甲亢二分类检测 |
+| `causal.py` | 基于 `CausalForestDML` 的剂量因果异质性分析 |
+| `cluster.py` | 基于激素轨迹的患者分群分析 |
+| `draft/` | 早期探索脚本与实验性代码 |
+
+建议医学合作者优先阅读 `repluse.py` 对应的 `multistate_result/` 输出，因为这部分最接近当前论文主线。
+
+---
+
+## 10 关键技术术语简明解释
+
+为便于医学读者理解，下面对一些关键术语做简要说明。
+
+### 10.1 Landmark
+
+指在某一个随访时间点上，使用截至该时点可获得的信息来做预测。核心思想是“只用当时能知道的数据预测未来”，避免未来信息泄漏。
+
+### 10.2 Long format
+
+把原本“一位患者一行”的宽表，展开成“一位患者多个随访区间多行”的长表。这样更适合研究疾病状态如何随时间演变。
+
+### 10.3 PR-AUC
+
+Precision-Recall 曲线下面积，尤其适合阳性事件较少的任务。对于复发预测这类不平衡问题，通常比 `ACC` 更有解释价值。
+
+### 10.4 Brier score
+
+衡量预测概率与真实结局之间偏差的指标。数值越低，表示概率预测越准确。
+
+### 10.5 Calibration
+
+指模型给出的预测概率是否接近真实发生概率。比如模型预测风险为 `20%` 的一组患者，真实是否大约也有 `20%` 的人发生事件。
+
+### 10.6 DCA
+
+Decision Curve Analysis，决策曲线分析。用于评价模型在不同决策阈值下是否真正带来临床净获益，而不是只在统计上“好看”。
+
+### 10.7 SHAP
+
+一种模型解释方法，用于展示每个变量对预测结果的贡献方向和大小。适合做结果解释，但不等于因果推断。
+
+---
+
+## 11 环境与运行
+
+推荐环境：
 
 ```bash
-python multi-state.py       # 多状态复发预测（结果 → multistate_result/）
-python all2.py              # 3/6 月疗效预测（结果 → all_result/）
-python causal.py            # 因果推断分析（结果 → causal_result/）
-python cluster.py           # 轨迹聚类（结果 → Clustering_Results/）
+conda activate med
 ```
+
+主要依赖：
+
+- `pandas`
+- `numpy`
+- `scikit-learn`
+- `xgboost`
+- `lightgbm`
+- `shap`
+- `matplotlib`
+- `seaborn`
+- `lifelines`
+- `econml`
+- `openpyxl`
+- `torch`
+- `joblib`
+
+常用运行命令：
+
+```bash
+python repluse.py
+python all2.py
+python hyper_detect.py
+python causal.py
+python cluster.py
+```
+
+主要输出目录：
+
+- `multistate_result/`：复发风险主分析结果
+- `all_result/`：固定 Landmark 三分类结果
+- `hyper_detect_result/`：二分类甲亢检测结果
+- `causal_result/`：因果推断结果
+- `Clustering_Results/`：轨迹聚类结果
+
+---
+
+## 12 建议的论文结构映射
+
+如果后续要把本 README 直接转成论文文本，建议对应关系如下：
+
+| README 部分 | 论文部分 |
+|---|---|
+| 第 1-3 节 | Introduction + Endpoint definition |
+| 第 4 节 | Methods |
+| 第 5-6 节 | Results |
+| 第 7-8 节 | Discussion |
+| 第 10 节 | 给医学合作者的术语说明，可不直接入文 |
+
+当前版本已经可以作为项目级说明文档，也可以作为论文初稿的骨架。

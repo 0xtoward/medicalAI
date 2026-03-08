@@ -1,4 +1,4 @@
-# 5篇paper读后感
+# 5篇paper读后感 + multi-state.py 暂存文档
 
 # 0x01  
 
@@ -380,3 +380,16 @@ Paper E 的套路是：用权重修正删失，让校准不被“只剩下好随
 - 用这些权重去算每个分箱的观测率（或拟合“观察率 vs $\hat p$”的加权逻辑回归）
 
 这就是 BLR-IPCW 的二元化版本。Paper E 对“权重模型很关键”的提醒也可以直接借来写局限/敏感性分析。
+
+
+# 0x06 multi-state.py 文档（暂存）
+
+基于**滚动 Landmark** 策略，在每个随访间隔对"当前状态为正常"的患者预测下一期状态（三分类：Hyper / Normal / Hypo）。
+
+- **划分**：按患者入组顺序 80/20 时序切分
+- **填充**：MissForest，训练集拟合（⚠️ 尚未做时序截断）
+- **调参**：`RandomizedSearchCV` + `GroupKFold`（f1_macro）
+- **评估**：Macro AUC (OVR)、Per-class AUC、Macro F1、Balanced Accuracy、3x3 混淆矩阵
+- **8 模型**：LR、RF、AdaBoost、GBC、XGBoost、LightGBM、MLP、Stacking
+- **输出**：Transition_Heatmaps、NextState_Distribution、Model_Comparison_Bar、Confusion_Matrix、PerClass_AUC、SHAP_Hyper
+- **已知问题**：MissForest 对所有 7 个时间点联合填充，存在时序泄漏
