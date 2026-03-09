@@ -1054,7 +1054,10 @@ def main():
     train_pids = set(unique_pids[:split_idx])
     tr_mask = np.array([p in train_pids for p in pids])
     te_mask = ~tr_mask
-    print(f"  Train: {tr_mask.sum()}  Test: {te_mask.sum()}")
+    n_train_patients = len(train_pids)
+    n_test_patients = len(unique_pids) - n_train_patients
+    print(f"  Train: {n_train_patients} patients, {tr_mask.sum()} records")
+    print(f"  Test:  {n_test_patients} patients, {te_mask.sum()} records")
 
     # --- Phase 1: Transition heatmaps (depth-6 imputer for descriptive view) ---
     print(f"\n--- Phase 1: State Transition Heatmaps ---")
@@ -1066,7 +1069,7 @@ def main():
         hm_imputer = joblib.load(hm_imp_path)
         print(f"  MissForest depth-{max_depth}: loaded from cache")
     else:
-        print(f"  MissForest depth-{max_depth}: fitting on train ({tr_mask.sum()})...")
+        print(f"  MissForest depth-{max_depth}: fitting on train ({n_train_patients} patients, {tr_mask.sum()} records)...")
         hm_imputer = fit_missforest(hm_raw[tr_mask])
         joblib.dump(hm_imputer, hm_imp_path)
     hm_filled = apply_missforest(hm_raw, hm_imputer, max_depth)
@@ -1092,7 +1095,7 @@ def main():
         if imp_path.exists():
             imputer = joblib.load(imp_path)
         else:
-            print(f"  MissForest depth-{depth} ({interval_name}): fitting on train...")
+            print(f"  MissForest depth-{depth} ({interval_name}): fitting on train ({n_train_patients} patients, {tr_mask.sum()} records)...")
             imputer = fit_missforest(raw[tr_mask])
             joblib.dump(imputer, imp_path)
 

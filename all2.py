@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor
@@ -235,9 +234,16 @@ def run_experiment(landmark_name, seq_len):
     X_s_raw, ft3_raw, ft4_raw, tsh_raw, y, pids = load_data_raw()
     n_static = X_s_raw.shape[1]
 
-    # --- Step 1: Split FIRST (by patient group) ---
-    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=Config.SEED)
-    train_idx, test_idx = next(gss.split(X_s_raw, y, groups=pids))
+    # --- Step 1: Temporal split FIRST (by enrollment order) ---
+    unique_pids = list(dict.fromkeys(pids))
+    split_idx = int(len(unique_pids) * 0.8)
+    train_pids = set(unique_pids[:split_idx])
+    train_idx = np.where(np.array([pid in train_pids for pid in pids]))[0]
+    test_idx = np.where(np.array([pid not in train_pids for pid in pids]))[0]
+    n_train_patients = len(train_pids)
+    n_test_patients = len(unique_pids) - n_train_patients
+    print(f"  Train: {n_train_patients} patients, {len(train_idx)} records")
+    print(f"  Test:  {n_test_patients} patients, {len(test_idx)} records")
 
     # --- Step 2: Temporal-safe MissForest: only columns ≤ seq_len ---
     ft3_cut = ft3_raw[:, :seq_len]
@@ -250,7 +256,7 @@ def run_experiment(landmark_name, seq_len):
         imputer = joblib.load(imputer_path)
         print(f"  MissForest (seq≤{seq_len}): loaded from cache")
     else:
-        print(f"  MissForest (seq≤{seq_len}): fitting on train ({len(train_idx)} samples)...")
+        print(f"  MissForest (seq≤{seq_len}): fitting on train ({n_train_patients} patients, {len(train_idx)} records)...")
         imputer = fit_missforest(raw_all[train_idx])
         joblib.dump(imputer, imputer_path)
         print(f"  MissForest (seq≤{seq_len}): saved to {imputer_path}")
