@@ -1,0 +1,4 @@
+Metric,Model,Value
+Best C-index,Event-Specific RSF [markov_lite],0.7906770648706133
+Best next-window AUC,Event-Specific RSF [history_augmented],0.8015444015444015
+Best next-window PR-AUC,AG Cox [history_augmented],0.36015623230545546

@@ -6,23 +6,18 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.ensemble import (GradientBoostingClassifier, RandomForestClassifier,
-                              AdaBoostClassifier)
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import RandomizedSearchCV, GroupKFold
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-from sklearn.impute import IterativeImputer
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVC
 from sklearn.metrics import (roc_auc_score, average_precision_score,
                              accuracy_score, balanced_accuracy_score,
                              f1_score, confusion_matrix, brier_score_loss)
 from sklearn.calibration import calibration_curve
 from sklearn.ensemble import StackingClassifier
-import xgboost as xgb
-import lightgbm as lgb
 import shap
 from pathlib import Path
 import scipy.integrate
@@ -32,6 +27,31 @@ from lifelines import CoxPHFitter
 from scipy.special import expit
 import joblib
 from sklearn.base import clone
+from imblearn.ensemble import BalancedRandomForestClassifier
+# from tabpfn import TabPFNClassifier  # Disabled for the current manuscript version.
+from utils.config import SEED, STATIC_NAMES, TIME_STAMPS, STATE_NAMES
+from utils.data import (load_data as _load_data, fit_missforest,
+                        apply_missforest, split_imputed, build_states_from_labels,
+                        load_or_fit_depth_imputer as _load_or_fit_depth_imputer)
+from utils.evaluation import (
+    aggregate_patient_level as _aggregate_patient_level,
+    bootstrap_group_cis as _bootstrap_group_cis,
+    compute_binary_metrics as _compute_binary_metrics,
+    compute_calibration_stats as _compute_calibration_stats,
+    compute_dca as _compute_dca,
+    evaluate_patient_aggregation_sensitivity as _evaluate_patient_aggregation_sensitivity,
+    evaluate_window_sensitivity as _evaluate_window_sensitivity,
+    format_ci as _format_ci,
+    save_calibration_figure as _save_calibration_figure,
+    save_dca_figure as _save_dca_figure,
+    save_patient_aggregation_sensitivity_figure as _save_patient_aggregation_sensitivity_figure,
+    save_patient_risk_strata as _save_patient_risk_strata,
+    save_threshold_sensitivity_figure as _save_threshold_sensitivity_figure,
+    select_best_threshold as _select_best_threshold,
+    concordance_index_simple as _concordance_index_simple,
+)
+from utils.recurrence import derive_recurrent_survival_data as _derive_recurrent_survival_data
+from utils.model_viz import save_logistic_regression_visuals
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -39,94 +59,57 @@ plt.rcParams["font.family"] = "DejaVu Sans"
 # 1. 基础配置
 # ==========================================
 class Config:
-    FILE_PATH = "1003.xlsx" 
-    OUT_DIR = Path("./multistate_result/")
-    SEED = 42
-    
-    COL_IDX = {
-        'ID': 0, 'Outcome': 14,
-        'Static_Feats': [3, 4, 5, 6, 7, 8, 9, 11, 12, 19, 20, 21, 22, 23, 24, 25],
-        'FT3_Sequence': [16, 29, 38, 47, 56, 65, 74],
-        'FT4_Sequence': [17, 30, 39, 48, 57, 66, 75],
-        'TSH_Sequence': [18, 31, 40, 49, 58, 67, 76],
-        'Eval_Cols': [35, 44, 53, 62, 71, 80],  # 1M,3M,6M,1Y,1.5Y,2Y
-    }
-    STATIC_NAMES = ["Sex", "Age", "Height", "Weight", "BMI", "Exophthalmos",
-                    "ThyroidW", "RAI3d", "TreatCount", "TGAb", "TPOAb",
-                    "TRAb", "Uptake24h", "MaxUptake", "HalfLife", "Dose"]
-
-    # 7 time points: 0M (all hyper) + 6 doctor evaluations
-    TIME_STAMPS = ["0M", "1M", "3M", "6M", "12M", "18M", "24M"]
-    STATE_NAMES = ["Hyper", "Normal", "Hypo"]
+    OUT_DIR = Path("./results/repluse/")
+    LEGACY_OUT_DIR = Path("./multistate_result/")
 
 Config.OUT_DIR.mkdir(parents=True, exist_ok=True)
-np.random.seed(Config.SEED)
-
-def load_data():
-    """加载数据，返回原始特征（未填充）和医生评价标签"""
-    df = pd.read_excel(Config.FILE_PATH, header=None, engine='openpyxl').iloc[2:].reset_index(drop=True)
-    df['Patient_ID'] = df.iloc[:, Config.COL_IDX['ID']].ffill()
-    valid_idx = df.iloc[:, Config.COL_IDX['Outcome']].dropna().index
-    df = df.loc[valid_idx].reset_index(drop=True)
-
-    X_s = df.iloc[:, Config.COL_IDX['Static_Feats']].apply(pd.to_numeric, errors='coerce').values
-    gt = df.iloc[:, 3].astype(str).str.strip()
-    X_s[:, 0] = np.where((gt == "男") | (gt.str.upper() == "M") | (df.iloc[:, 3] == 1), 1.0, 0.0)
-
-    ft3_raw = df.iloc[:, Config.COL_IDX['FT3_Sequence']].apply(pd.to_numeric, errors='coerce').values
-    ft4_raw = df.iloc[:, Config.COL_IDX['FT4_Sequence']].apply(pd.to_numeric, errors='coerce').values
-    tsh_raw = df.iloc[:, Config.COL_IDX['TSH_Sequence']].apply(pd.to_numeric, errors='coerce').values
-
-    # Doctor evaluation labels: 1=甲亢, 2=甲减, 3=正常
-    eval_raw = df.iloc[:, Config.COL_IDX['Eval_Cols']].apply(pd.to_numeric, errors='coerce').values
-
-    return X_s, ft3_raw, ft4_raw, tsh_raw, eval_raw, df['Patient_ID'].values
+np.random.seed(SEED)
 
 
-def split_imputed(arr, n_static, n_lab, n_eval):
-    """Split imputed matrix back into components."""
-    i = 0
-    X_s = arr[:, i:i+n_static];       i += n_static
-    ft3 = arr[:, i:i+n_lab];          i += n_lab
-    ft4 = arr[:, i:i+n_lab];          i += n_lab
-    tsh = arr[:, i:i+n_lab];          i += n_lab
-    evals = arr[:, i:i+n_eval]
-    return X_s, ft3, ft4, tsh, evals
+def load_or_fit_depth_imputer(raw_train, cache_path, fallback_cache_path=None, label=""):
+    """Load a local/shared MissForest cache or fit a new one."""
+    primary = Path(cache_path)
+    fallback = Path(fallback_cache_path) if fallback_cache_path is not None else None
+    if primary.exists():
+        print(f"  MissForest {label}: loaded from cache")
+    elif fallback is not None and fallback.exists():
+        print(f"  MissForest {label}: loaded from legacy cache")
+    else:
+        print(f"  MissForest {label}: fitting on train ({len(raw_train)} records)...")
+    return _load_or_fit_depth_imputer(raw_train, cache_path, fallback_cache_path=fallback_cache_path)
 
 
-def fit_missforest(raw_matrix):
-    """Fit IterativeImputer (MissForest) on training data."""
-    imputer = IterativeImputer(
-        estimator=RandomForestRegressor(n_estimators=50, max_depth=5,
-                                        random_state=Config.SEED, n_jobs=1),
-        max_iter=10, random_state=Config.SEED
+def compute_recurrent_c_index_from_intervals(df_long, proba):
+    """Project interval predictions to spell starts and compute event-time ranking."""
+    tmp = df_long.copy().reset_index(drop=True)
+    tmp["proba"] = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    recurrent_df = _derive_recurrent_survival_data(tmp)
+    if len(recurrent_df) == 0:
+        return np.nan
+    return _concordance_index_simple(
+        recurrent_df["Gap_Time"].values,
+        recurrent_df["proba"].values,
+        recurrent_df["Event"].values,
     )
-    imputer.fit(raw_matrix)
-    return imputer
 
 
-def apply_missforest(raw_matrix, imputer, n_eval_cols):
-    """Transform with fitted imputer, then round eval cols to {1,2,3}."""
-    filled = imputer.transform(raw_matrix)
-    eval_start = filled.shape[1] - n_eval_cols
-    filled[:, eval_start:] = np.clip(np.round(filled[:, eval_start:]), 1, 3)
-    return filled
-
-def build_states_from_labels(eval_imputed):
-    """
-    Build state matrix from (imputed) doctor evaluation labels.
-    0M: all Hyper (pre-treatment). 1M-24M: from labels.
-    Mapping: 1=甲亢→0(Hyper), 3=正常→1(Normal), 2=甲减→2(Hypo).
-    """
-    N = eval_imputed.shape[0]
-    T = len(Config.TIME_STAMPS)
-    S = np.zeros((N, T), dtype=int)
-    label_map = {1: 0, 3: 1, 2: 2}
-    for t in range(eval_imputed.shape[1]):
-        for i in range(N):
-            v = int(round(eval_imputed[i, t]))
-            S[i, t + 1] = label_map.get(v, 0)
-    return S
+def save_lr_artifacts(model_name, model, feat_names, decision_threshold=None):
+    """Visualize LR pipeline structure and parameter shapes."""
+    if model_name not in {"Logistic Reg.", "Elastic LR"}:
+        return
+    try:
+        prefix = "Logistic_Reg" if model_name == "Logistic Reg." else "Elastic_LR"
+        save_logistic_regression_visuals(
+            model_name,
+            model,
+            feat_names,
+            Config.OUT_DIR,
+            prefix=prefix,
+            decision_threshold=decision_threshold,
+            output_label="P(Relapse at next window)",
+        )
+    except Exception as e:
+        print(f"  LR visualization failed for {model_name}: {e}")
 
 def plot_transition_heatmaps(S_matrix):
     """Plot 3x3 state transition heatmaps for each consecutive interval."""
@@ -144,7 +127,7 @@ def plot_transition_heatmaps(S_matrix):
         if i >= n_intervals:
             ax.set_visible(False)
             continue
-        label = f"{Config.TIME_STAMPS[i]} -> {Config.TIME_STAMPS[i+1]}"
+        label = f"{TIME_STAMPS[i]} -> {TIME_STAMPS[i+1]}"
         mat = np.zeros((3, 3), dtype=int)
         for sf in range(3):
             for st in range(3):
@@ -152,7 +135,7 @@ def plot_transition_heatmaps(S_matrix):
         total += mat
 
         sns.heatmap(mat, annot=True, fmt="d", cmap="Blues",
-                    xticklabels=Config.STATE_NAMES, yticklabels=Config.STATE_NAMES, ax=ax)
+                    xticklabels=STATE_NAMES, yticklabels=STATE_NAMES, ax=ax)
         ax.set_title(label, fontsize=12)
         ax.set_xlabel("State at t+1")
         ax.set_ylabel("State at t")
@@ -186,10 +169,14 @@ def build_long_format_data(X_s, X_d, S_matrix, pids, target_k=None):
                 labs_k = X_d[i, k, :] 
                 labs_0 = X_d[i, 0, :]
                 y_relapse = 1 if S_matrix[i, k+1] == 0 else 0
+                next_state = int(S_matrix[i, k+1])
                 
                 # --- 核心特征注入 1：历史状态记忆 ---
                 hist_states = S_matrix[i, :k] # 取出 0 到 k-1 的历史状态
                 prev_state = S_matrix[i, k-1] if k > 0 else -1 # 上一步状态 (-1代表没有历史)
+                prior_relapse_count = int(
+                    sum(int(S_matrix[i, m] == 1 and S_matrix[i, m+1] == 0) for m in range(k))
+                )
                 ever_hyper = 1 if 0 in hist_states else 0
                 ever_hypo = 1 if 2 in hist_states else 0
                 time_in_normal = np.sum(hist_states == 1) # 之前总共正常过几个随访点
@@ -209,9 +196,15 @@ def build_long_format_data(X_s, X_d, S_matrix, pids, target_k=None):
                 records.append({
                     "Patient_ID": pid,
                     "Interval_ID": k,
-                    "Interval_Name": f"{Config.TIME_STAMPS[k]}->{Config.TIME_STAMPS[k+1]}",
+                    "Interval_Name": f"{TIME_STAMPS[k]}->{TIME_STAMPS[k+1]}",
+                    "Start_Time": [0, 1, 3, 6, 12, 18, 24][k],
+                    "Stop_Time": [0, 1, 3, 6, 12, 18, 24][k+1],
+                    "Interval_Width": [1, 2, 3, 6, 6, 6][k],
                     "Y_Relapse": y_relapse,
-                    **{name: val for name, val in zip(Config.STATIC_NAMES, xs)},
+                    "Next_State": STATE_NAMES[next_state],
+                    "Prior_Relapse_Count": prior_relapse_count,
+                    "Event_Order": prior_relapse_count + 1,
+                    **{name: val for name, val in zip(STATIC_NAMES, xs)},
                     "FT3_Current": labs_k[0],
                     "FT4_Current": labs_k[1],
                     "logTSH_Current": np.log1p(np.clip(labs_k[2], 0, None)),
@@ -276,60 +269,61 @@ class CoxPHWrapper:
 # 3. 多算法对比 + 严格前瞻验证
 # ==========================================
 def get_tune_specs():
-    """Return {name: (estimator, param_grid, color, linestyle, n_iter)}."""
-    S = Config.SEED
+    """Return {name: (estimator, param_grid, color, linestyle, n_iter, n_jobs)}."""
+    S = SEED
     return {
         "Logistic Reg.": (
             Pipeline([('scaler', StandardScaler()),
                       ('lr', LogisticRegression(max_iter=2000, random_state=S))]),
             {'lr__C': [0.001, 0.01, 0.1, 0.5, 1, 5, 10],
              'lr__penalty': ['l1', 'l2'], 'lr__solver': ['saga']},
-            "#1f77b4", "-.", 14
+            "#1f77b4", "-.", 14, -1
+        ),
+        "Elastic LR": (
+            Pipeline([('scaler', StandardScaler()),
+                      ('lr', LogisticRegression(
+                          max_iter=4000, penalty='elasticnet', solver='saga', random_state=S
+                      ))]),
+            {'lr__C': [0.001, 0.01, 0.1, 0.5, 1, 5, 10],
+             'lr__l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]},
+            "#4c78a8", "-.", 12, -1
+        ),
+        "SVM": (
+            Pipeline([('scaler', StandardScaler()),
+                      ('svc', SVC(
+                          kernel='rbf', probability=True, class_weight='balanced',
+                          random_state=S
+                      ))]),
+            {'svc__C': [0.1, 0.5, 1, 2, 5, 10],
+             'svc__gamma': ['scale', 0.01, 0.05, 0.1, 0.5]},
+            "#f58518", ":", 14, -1
         ),
         "Random Forest": (
-            RandomForestClassifier(random_state=S, n_jobs=1),
+            RandomForestClassifier(random_state=S, n_jobs=1, class_weight='balanced'),
             {'n_estimators': [100, 200, 300, 500],
              'max_depth': [3, 5, 7, 10, None],
              'min_samples_leaf': [3, 5, 10, 20],
              'max_features': ['sqrt', 'log2', 0.5]},
-            "#ff7f0e", "--", 20
+            "#54a24b", "--", 20, -1
         ),
-        "AdaBoost": (
-            AdaBoostClassifier(random_state=S),
-            {'n_estimators': [50, 100, 200, 300],
-             'learning_rate': [0.01, 0.05, 0.1, 0.5, 1.0]},
-            "#9467bd", "--", 15
-        ),
-        "GradientBoosting": (
-            GradientBoostingClassifier(random_state=S),
+        "Balanced RF": (
+            BalancedRandomForestClassifier(random_state=S, n_jobs=1),
             {'n_estimators': [100, 200, 300, 500],
-             'learning_rate': [0.01, 0.03, 0.05, 0.1],
              'max_depth': [2, 3, 4, 5],
-             'subsample': [0.6, 0.7, 0.8, 1.0],
-             'min_samples_leaf': [5, 10, 20]},
-            "#2ca02c", "--", 20
+             'min_samples_leaf': [1, 3, 5, 10],
+             'sampling_strategy': ['all', 'not minority']},
+            "#72b7b2", "--", 16, -1
         ),
-        "XGBoost": (
-            xgb.XGBClassifier(eval_metric='logloss', random_state=S,
-                              n_jobs=1, verbosity=0),
-            {'n_estimators': [100, 200, 300, 500],
-             'learning_rate': [0.01, 0.03, 0.05, 0.1],
-             'max_depth': [2, 3, 4, 5],
-             'subsample': [0.6, 0.7, 0.8, 1.0],
-             'colsample_bytree': [0.6, 0.8, 1.0],
-             'min_child_weight': [1, 3, 5]},
-            "#d62728", "--", 20
-        ),
-        "LightGBM": (
-            lgb.LGBMClassifier(random_state=S, n_jobs=1, verbosity=-1),
-            {'n_estimators': [100, 200, 300, 500],
-             'learning_rate': [0.01, 0.03, 0.05, 0.1],
-             'max_depth': [2, 3, 4, 5, -1],
-             'subsample': [0.6, 0.7, 0.8, 1.0],
-             'colsample_bytree': [0.6, 0.8, 1.0],
-             'min_child_samples': [5, 10, 20]},
-            "#e377c2", "--", 20
-        ),
+        # "LightGBM": (
+        #     lgb.LGBMClassifier(random_state=S, n_jobs=1, verbosity=-1),
+        #     {'n_estimators': [100, 200, 300, 500],
+        #      'learning_rate': [0.01, 0.03, 0.05, 0.1],
+        #      'max_depth': [2, 3, 4, 5, -1],
+        #      'subsample': [0.6, 0.7, 0.8, 1.0],
+        #      'colsample_bytree': [0.6, 0.8, 1.0],
+        #      'min_child_samples': [5, 10, 20]},
+        #     "#b279a2", "--", 20, -1
+        # ),
         "MLP": (
             Pipeline([('scaler', StandardScaler()),
                       ('mlp', MLPClassifier(max_iter=1000, early_stopping=True,
@@ -338,21 +332,51 @@ def get_tune_specs():
             {'mlp__hidden_layer_sizes': [(32,), (64, 32), (128, 64), (32, 16)],
              'mlp__alpha': [0.001, 0.01, 0.05, 0.1],
              'mlp__learning_rate_init': [0.0005, 0.001, 0.005, 0.01]},
-            "#8c564b", ":", 16
+            "#9d755d", ":", 16, -1
         ),
+        # "TabPFN": (
+        #     TabPFNClassifier(
+        #         device='cpu',
+        #         random_state=S,
+        #         n_estimators=8,
+        #         n_preprocessing_jobs=1,
+        #         ignore_pretraining_limits=True
+        #     ),
+        #     None,
+        #     "#bab0ac", "-", 0, 1
+        # ),
         "Cox PH": (
             CoxPHWrapper(penalizer=0.1),
             {'penalizer': [0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]},
-            "#bcbd22", "-.", 7
+            "#bcbd22", "-.", 7, 1
         ),
     }
+
+
+def fit_candidate_model(base, grid, n_iter, n_jobs, cv, X_tr_df, y_tr, groups_tr):
+    """Tune model with GroupKFold, or evaluate a fixed-config model."""
+    if grid:
+        rs = RandomizedSearchCV(
+            base, grid, n_iter=n_iter, cv=cv,
+            scoring='average_precision', random_state=SEED, n_jobs=n_jobs
+        )
+        rs.fit(X_tr_df, y_tr, groups=groups_tr)
+        return rs.best_estimator_, rs.best_score_, rs.best_params_
+
+    scores = []
+    for f_tr, f_val in cv.split(X_tr_df, y_tr, groups=groups_tr):
+        m = clone(base)
+        m.fit(X_tr_df.iloc[f_tr], y_tr[f_tr])
+        proba = m.predict_proba(X_tr_df.iloc[f_val])[:, 1]
+        scores.append(average_precision_score(y_tr[f_val], proba))
+    return clone(base), float(np.mean(scores)), None
 
 
 def run_shap_analysis(model_name, model, X_tr_df, feat_names):
     """Run SHAP on the selected best model with a model-appropriate explainer."""
     print(f"\n  SHAP analysis on: {model_name}")
     try:
-        if model_name == "Logistic Reg." and isinstance(model, Pipeline):
+        if model_name in {"Logistic Reg.", "Elastic LR"} and isinstance(model, Pipeline):
             scaler = model.named_steps['scaler']
             lr = model.named_steps['lr']
             X_scaled = scaler.transform(X_tr_df)
@@ -361,15 +385,6 @@ def run_shap_analysis(model_name, model, X_tr_df, feat_names):
             plt.figure(figsize=(10, 8))
             shap.summary_plot(
                 shap_values, X_scaled, feature_names=feat_names,
-                max_display=20, show=False
-            )
-        elif isinstance(model, xgb.XGBClassifier):
-            dm = xgb.DMatrix(X_tr_df, feature_names=feat_names)
-            contribs = model.get_booster().predict(dm, pred_contribs=True)
-            shap_values = contribs[:, :-1]
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(
-                shap_values, X_tr_df, feature_names=feat_names,
                 max_display=20, show=False
             )
         elif hasattr(model, 'feature_importances_'):
@@ -384,7 +399,7 @@ def run_shap_analysis(model_name, model, X_tr_df, feat_names):
             )
         else:
             # Generic fallback for models without native SHAP support.
-            bg = shap.sample(X_tr_df, min(100, len(X_tr_df)), random_state=Config.SEED)
+            bg = shap.sample(X_tr_df, min(100, len(X_tr_df)), random_state=SEED)
             eval_x = X_tr_df.iloc[:min(300, len(X_tr_df))]
             explainer = shap.Explainer(
                 lambda data: model.predict_proba(pd.DataFrame(data, columns=feat_names))[:, 1],
@@ -406,359 +421,76 @@ def run_shap_analysis(model_name, model, X_tr_df, feat_names):
 
 def compute_binary_metrics(y_true, proba, threshold):
     """Compute discrimination/calibration/classification metrics."""
-    y_true = np.asarray(y_true).astype(int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    pred = (proba >= threshold).astype(int)
-    tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
-    return {
-        'auc': roc_auc_score(y_true, proba),
-        'prauc': average_precision_score(y_true, proba),
-        'brier': brier_score_loss(y_true, proba),
-        'acc': accuracy_score(y_true, pred),
-        'bacc': balanced_accuracy_score(y_true, pred),
-        'f1': f1_score(y_true, pred, zero_division=0),
-        'recall': tp / (tp + fn) if (tp + fn) else np.nan,
-        'specificity': tn / (tn + fp) if (tn + fp) else np.nan,
-        'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
-        'threshold': threshold,
-    }
+    return _compute_binary_metrics(y_true, proba, threshold)
 
 
 def compute_calibration_stats(y_true, proba):
     """Compute calibration-in-the-large style intercept and slope."""
-    y_true = np.asarray(y_true).astype(int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    if len(np.unique(y_true)) < 2:
-        return {'intercept': np.nan, 'slope': np.nan}
-
-    logit_p = np.log(proba / (1 - proba)).reshape(-1, 1)
-    try:
-        lr = LogisticRegression(penalty=None, solver='lbfgs', max_iter=2000)
-        lr.fit(logit_p, y_true)
-        return {
-            'intercept': float(lr.intercept_[0]),
-            'slope': float(lr.coef_[0, 0]),
-        }
-    except Exception:
-        return {'intercept': np.nan, 'slope': np.nan}
+    return _compute_calibration_stats(y_true, proba)
 
 
 def bootstrap_group_cis(eval_df, threshold, group_col='Patient_ID', n_boot=800):
     """Cluster bootstrap CIs by patient to respect repeated intervals."""
-    group_values = eval_df[group_col].dropna().unique()
-    if len(group_values) == 0:
-        return {}
-
-    grouped = {g: eval_df.loc[eval_df[group_col] == g] for g in group_values}
-    rng = np.random.default_rng(Config.SEED)
-    store = {k: [] for k in ['auc', 'prauc', 'brier', 'recall', 'specificity', 'cal_intercept', 'cal_slope']}
-
-    for _ in range(n_boot):
-        sampled_groups = rng.choice(group_values, size=len(group_values), replace=True)
-        sampled_df = pd.concat([grouped[g] for g in sampled_groups], ignore_index=True)
-        y_boot = sampled_df['Y'].values
-        if len(np.unique(y_boot)) < 2:
-            continue
-        m = compute_binary_metrics(y_boot, sampled_df['proba'].values, threshold)
-        cal = compute_calibration_stats(y_boot, sampled_df['proba'].values)
-        m['cal_intercept'] = cal['intercept']
-        m['cal_slope'] = cal['slope']
-        for key in store:
-            if np.isfinite(m[key]):
-                store[key].append(m[key])
-
-    cis = {}
-    for key, values in store.items():
-        if len(values) < 20:
-            cis[key] = (np.nan, np.nan)
-        else:
-            cis[key] = (float(np.percentile(values, 2.5)),
-                        float(np.percentile(values, 97.5)))
-    return cis
+    return _bootstrap_group_cis(eval_df, threshold, group_col=group_col, n_boot=n_boot, seed=SEED)
 
 
 def format_ci(cis, key):
     """Format CI text for printing."""
-    low, high = cis.get(key, (np.nan, np.nan))
-    if np.isnan(low) or np.isnan(high):
-        return "NA"
-    return f"[{low:.3f}, {high:.3f}]"
+    return _format_ci(cis, key)
 
 
 def save_calibration_figure(y_true, proba, title, out_path, n_bins=6):
     """Save calibration curve + prediction histogram."""
-    y_true = np.asarray(y_true).astype(int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    frac_pos, mean_pred = calibration_curve(y_true, proba, n_bins=n_bins, strategy='quantile')
-
-    fig = plt.figure(figsize=(7.5, 8))
-    gs = fig.add_gridspec(2, 1, height_ratios=[3, 1.2])
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[1, 0])
-
-    ax1.plot([0, 1], [0, 1], '--', color='gray', lw=1.5, label='Perfect calibration')
-    ax1.plot(mean_pred, frac_pos, marker='o', lw=2, color='navy', label='Model')
-    ax1.set_title(title, fontsize=13)
-    ax1.set_xlabel("Predicted probability")
-    ax1.set_ylabel("Observed event rate")
-    ax1.grid(alpha=0.3)
-    ax1.legend()
-
-    ax2.hist(proba, bins=20, color='steelblue', alpha=0.85, edgecolor='white')
-    ax2.set_xlabel("Predicted probability")
-    ax2.set_ylabel("Count")
-    ax2.grid(alpha=0.2)
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    return _save_calibration_figure(y_true, proba, title, out_path, n_bins=n_bins)
 
 
 def save_threshold_sensitivity_figure(y_true, proba, best_thr, title, out_path):
     """Show how recall/specificity/F1 vary across thresholds."""
-    y_true = np.asarray(y_true).astype(int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    thresholds = np.arange(0.02, 0.61, 0.01)
-    rows = []
-    for thr in thresholds:
-        m = compute_binary_metrics(y_true, proba, thr)
-        rows.append({
-            'threshold': thr,
-            'recall': m['recall'],
-            'specificity': m['specificity'],
-            'f1': m['f1'],
-        })
-    df = pd.DataFrame(rows)
-
-    fig, ax = plt.subplots(figsize=(8, 5.5))
-    ax.plot(df['threshold'], df['recall'], lw=2, label='Recall')
-    ax.plot(df['threshold'], df['specificity'], lw=2, label='Specificity')
-    ax.plot(df['threshold'], df['f1'], lw=2, label='F1')
-    ax.axvline(best_thr, color='black', linestyle='--', alpha=0.7, label=f'Chosen threshold={best_thr:.2f}')
-    ax.set_title(title, fontsize=13)
-    ax.set_xlabel("Threshold")
-    ax.set_ylabel("Metric value")
-    ax.set_ylim(0, 1.02)
-    ax.grid(alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    return _save_threshold_sensitivity_figure(y_true, proba, best_thr, title, out_path)
 
 
 def compute_dca(y_true, proba, thresholds=None):
     """Decision curve analysis net benefit."""
-    y_true = np.asarray(y_true).astype(int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    if thresholds is None:
-        thresholds = np.arange(0.02, 0.51, 0.01)
-
-    n = len(y_true)
-    prevalence = y_true.mean()
-    rows = []
-    for thr in thresholds:
-        pred = (proba >= thr).astype(int)
-        tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
-        odds = thr / (1 - thr)
-        nb_model = tp / n - fp / n * odds
-        nb_all = prevalence - (1 - prevalence) * odds
-        rows.append({
-            'threshold': thr,
-            'model': nb_model,
-            'treat_all': nb_all,
-            'treat_none': 0.0
-        })
-    return pd.DataFrame(rows)
+    return _compute_dca(y_true, proba, thresholds=thresholds)
 
 
 def save_dca_figure(y_true, proba, title, out_path):
     """Save DCA figure."""
-    dca_df = compute_dca(y_true, proba)
-    fig, ax = plt.subplots(figsize=(8, 5.5))
-    ax.plot(dca_df['threshold'], dca_df['model'], lw=2.2, color='darkgreen', label='Model')
-    ax.plot(dca_df['threshold'], dca_df['treat_all'], lw=1.6, color='crimson', linestyle='--', label='Treat all')
-    ax.plot(dca_df['threshold'], dca_df['treat_none'], lw=1.6, color='black', linestyle=':', label='Treat none')
-    ax.set_title(title, fontsize=13)
-    ax.set_xlabel("Threshold probability")
-    ax.set_ylabel("Net benefit")
-    ax.grid(alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    return _save_dca_figure(y_true, proba, title, out_path)
 
 
 def aggregate_patient_level(df_long, proba, method='product'):
     """Aggregate interval risks into patient-level 'any relapse during follow-up' risk."""
-    tmp = df_long[['Patient_ID', 'Interval_Name', 'Y_Relapse']].copy().reset_index(drop=True)
-    tmp['proba'] = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-
-    patient_rows = []
-    for pid, g in tmp.groupby('Patient_ID', sort=False):
-        probs = g['proba'].values
-        if method == 'product':
-            agg_proba = float(1 - np.prod(1 - probs))
-        elif method == 'max':
-            agg_proba = float(np.max(probs))
-        elif method == 'mean':
-            agg_proba = float(np.mean(probs))
-        else:
-            raise ValueError(f"Unknown aggregation method: {method}")
-        patient_rows.append({
-            'Patient_ID': pid,
-            'Y': int(g['Y_Relapse'].max()),
-            'proba': agg_proba,
-            'Max_Interval_Risk': float(np.max(probs)),
-            'Mean_Interval_Risk': float(np.mean(probs)),
-            'Intervals': int(len(g)),
-            'First_Window': g['Interval_Name'].iloc[0],
-            'Last_Window': g['Interval_Name'].iloc[-1],
-            'Aggregation': method,
-        })
-    return pd.DataFrame(patient_rows)
+    return _aggregate_patient_level(df_long, proba, method=method)
 
 
 def select_best_threshold(y_true, proba, low=0.02, high=0.95, step=0.01):
     """Select threshold by F1."""
-    best_thr, best_f1 = 0.5, -1.0
-    for thr in np.arange(low, high + 1e-9, step):
-        f1 = f1_score(y_true, (proba >= thr).astype(int), zero_division=0)
-        if f1 > best_f1:
-            best_f1, best_thr = f1, thr
-    return best_thr
+    return _select_best_threshold(y_true, proba, low=low, high=high, step=step)
 
 
 def save_patient_risk_strata(train_patient_df, test_patient_df, out_path):
     """Use train-set quartiles for patient-level risk stratification."""
-    train_scores = np.clip(train_patient_df['proba'].values, 0, 1)
-    bins = np.quantile(train_scores, [0, 0.25, 0.5, 0.75, 1.0])
-    bins[0] = min(bins[0], 0.0)
-    bins[-1] = max(bins[-1], 1.0)
-    for i in range(1, len(bins)):
-        if bins[i] <= bins[i - 1]:
-            bins[i] = bins[i - 1] + 1e-6
-
-    labels = ['Q1', 'Q2', 'Q3', 'Q4']
-    risk_group = pd.cut(test_patient_df['proba'], bins=bins, include_lowest=True, labels=labels)
-    strat_df = test_patient_df.copy()
-    strat_df['Risk_Group'] = risk_group.astype(str)
-
-    summary = strat_df.groupby('Risk_Group').agg(
-        N=('Y', 'size'),
-        Observed=('Y', 'mean'),
-        Predicted=('proba', 'mean')
-    ).reindex(labels).reset_index()
-
-    fig, ax = plt.subplots(figsize=(8, 5.5))
-    bars = ax.bar(summary['Risk_Group'], summary['Observed'], color='cornflowerblue', alpha=0.85, label='Observed relapse rate')
-    ax.plot(summary['Risk_Group'], summary['Predicted'], marker='o', lw=2, color='darkorange', label='Mean predicted risk')
-    for bar, n in zip(bars, summary['N'].fillna(0).astype(int)):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                f"n={n}", ha='center', fontsize=9)
-    ax.set_ylim(0, min(1.0, float(np.nanmax([summary['Observed'].max(), summary['Predicted'].max()]) + 0.12)))
-    ax.set_title("Patient-Level Risk Stratification (Q1-Q4)", fontsize=13)
-    ax.set_xlabel("Risk groups from train-set quartiles")
-    ax.set_ylabel("Relapse probability")
-    ax.grid(axis='y', alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    return _save_patient_risk_strata(train_patient_df, test_patient_df, out_path)
 
 
 def evaluate_patient_aggregation_sensitivity(df_long_train, df_long_test, oof_proba, test_proba):
     """Compare patient-level conclusions across aggregation rules."""
-    methods = {
-        'Product_AnyRisk': 'product',
-        'Max_Interval_Risk': 'max',
-        'Mean_Interval_Risk': 'mean',
-    }
-    rows = []
-    curves = {}
-    for label, method in methods.items():
-        train_df = aggregate_patient_level(df_long_train, oof_proba, method=method)
-        test_df = aggregate_patient_level(df_long_test, test_proba, method=method)
-        thr = select_best_threshold(train_df['Y'].values, train_df['proba'].values,
-                                    low=0.05, high=0.95, step=0.01)
-        m = compute_binary_metrics(test_df['Y'].values, test_df['proba'].values, thr)
-        cal = compute_calibration_stats(test_df['Y'].values, test_df['proba'].values)
-        rows.append({
-            'Aggregation': label,
-            'Threshold': thr,
-            'AUC': m['auc'],
-            'PR_AUC': m['prauc'],
-            'Brier': m['brier'],
-            'Recall': m['recall'],
-            'Specificity': m['specificity'],
-            'Calibration_Intercept': cal['intercept'],
-            'Calibration_Slope': cal['slope'],
-        })
-        curves[label] = test_df
-    return pd.DataFrame(rows), curves
+    return _evaluate_patient_aggregation_sensitivity(df_long_train, df_long_test, oof_proba, test_proba)
 
 
 def save_patient_aggregation_sensitivity_figure(summary_df, out_path):
     """Visualize patient-level aggregation sensitivity."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8))
-    x = np.arange(len(summary_df))
-    labels = summary_df['Aggregation'].tolist()
-
-    axes[0].bar(x - 0.17, summary_df['AUC'], 0.34, label='AUC', color='steelblue')
-    axes[0].bar(x + 0.17, summary_df['PR_AUC'], 0.34, label='PR-AUC', color='coral')
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels(labels, rotation=15, ha='right')
-    axes[0].set_ylim(0, 1.0)
-    axes[0].set_title("Patient-Level Aggregation Sensitivity")
-    axes[0].grid(axis='y', alpha=0.3)
-    axes[0].legend()
-
-    axes[1].bar(x - 0.17, summary_df['Calibration_Intercept'], 0.34, label='Intercept', color='slateblue')
-    axes[1].bar(x + 0.17, summary_df['Calibration_Slope'], 0.34, label='Slope', color='darkorange')
-    axes[1].axhline(0.0, color='gray', linestyle='--', lw=1)
-    axes[1].axhline(1.0, color='gray', linestyle=':', lw=1)
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(labels, rotation=15, ha='right')
-    axes[1].set_title("Calibration Statistics by Aggregation")
-    axes[1].grid(axis='y', alpha=0.3)
-    axes[1].legend()
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    return _save_patient_aggregation_sensitivity_figure(summary_df, out_path)
 
 
 def evaluate_window_sensitivity(df_long_test, proba, threshold):
     """Check if results depend heavily on specific follow-up windows."""
-    tmp = df_long_test[['Patient_ID', 'Interval_Name', 'Y_Relapse']].copy().reset_index(drop=True)
-    tmp['Y'] = tmp['Y_Relapse'].astype(int)
-    tmp['proba'] = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
-    scenarios = {
-        'All_Windows': np.ones(len(tmp), dtype=bool),
-        'Exclude_1M_3M': tmp['Interval_Name'].values != '1M->3M',
-        'Exclude_12Mplus': ~tmp['Interval_Name'].isin(['12M->18M', '18M->24M']).values,
-        'Only_3Mplus': tmp['Interval_Name'].isin(['3M->6M', '6M->12M', '12M->18M', '18M->24M']).values,
-    }
-    rows = []
-    for label, mask in scenarios.items():
-        sub = tmp.loc[mask].copy()
-        if len(sub) == 0 or len(np.unique(sub['Y'])) < 2:
-            continue
-        m = compute_binary_metrics(sub['Y'].values, sub['proba'].values, threshold)
-        rows.append({
-            'Scenario': label,
-            'Intervals': len(sub),
-            'Events': int(sub['Y'].sum()),
-            'AUC': m['auc'],
-            'PR_AUC': m['prauc'],
-            'Brier': m['brier'],
-            'Recall': m['recall'],
-            'Specificity': m['specificity'],
-        })
-    return pd.DataFrame(rows)
+    return _evaluate_window_sensitivity(df_long_test, proba, threshold)
 
 
 def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
-    feat_cols = Config.STATIC_NAMES + [
+    feat_cols = STATIC_NAMES + [
         "FT3_Current", "FT4_Current", "logTSH_Current",
         "Ever_Hyper_Before", "Ever_Hypo_Before", "Time_In_Normal",
         "Delta_FT4_k0", "Delta_TSH_k0", "Delta_FT4_1step", "Delta_TSH_1step"
@@ -783,47 +515,44 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     y_te = df_long_test['Y_Relapse'].values
     groups_tr = df_long_train['Patient_ID'].values
 
-    n_tr_patients = df_long_train['Patient_ID'].nunique()
-    n_te_patients = df_long_test['Patient_ID'].nunique()
-    print(f"\n  Train: {n_tr_patients} patients, {len(y_tr)} intervals (relapse: {y_tr.sum()})")
-    print(f"  Test : {n_te_patients} patients, {len(y_te)} intervals (relapse: {y_te.sum()})")
+    print(f"\n  Train: {len(y_tr)} intervals (relapse: {y_tr.sum()})")
+    print(f"  Test : {len(y_te)} intervals (relapse: {y_te.sum()})")
     print(f"  Features: {len(feat_names)}")
 
     # ================= Tune ALL models (RandomizedSearchCV + GroupKFold) =================
     print("\n  Tuning ALL models (RandomizedSearchCV + GroupKFold)...")
-    S = Config.SEED
+    S = SEED
     gkf = GroupKFold(n_splits=3)
     tune_specs = get_tune_specs()
     tuned_models = {}
 
-    for name, (base_est, param_grid, color, ls, n_iter) in tune_specs.items():
-        njobs = 1 if isinstance(base_est, CoxPHWrapper) else -1
-        rs = RandomizedSearchCV(base_est, param_grid, n_iter=n_iter, cv=gkf,
-                                scoring='average_precision', random_state=S, n_jobs=njobs)
-        rs.fit(X_tr_df, y_tr, groups=groups_tr)
-        tuned_models[name] = (rs.best_estimator_, color, ls)
-        print(f"    {name:<22s} CV PR-AUC={rs.best_score_:.3f}  {rs.best_params_}")
+    for name, (base_est, param_grid, color, ls, n_iter, n_jobs) in tune_specs.items():
+        best_est, best_score, best_params = fit_candidate_model(
+            base_est, param_grid, n_iter, n_jobs, gkf, X_tr_df, y_tr, groups_tr
+        )
+        tuned_models[name] = (best_est, color, ls)
+        suffix = "[fixed config]" if best_params is None else str(best_params)
+        print(f"    {name:<22s} CV PR-AUC={best_score:.3f}  {suffix}")
 
     # Build Stacking from tuned base models
     stacking_est = StackingClassifier(
         estimators=[
             ('lr', clone(tuned_models['Logistic Reg.'][0])),
             ('rf', clone(tuned_models['Random Forest'][0])),
-            ('gbc', clone(tuned_models['GradientBoosting'][0])),
         ],
         final_estimator=LogisticRegression(max_iter=1000, random_state=S),
         cv=3, n_jobs=1, passthrough=False
     )
     tuned_models["Stacking"] = (stacking_est, "#17becf", "-")
-    print(f"    {'Stacking':<22s} Built from tuned LR + RF + GBC")
+    print(f"    {'Stacking':<22s} Built from tuned LR + RF")
 
     # ================= OOF threshold selection + refit =================
     print("\n  OOF threshold selection + evaluation...")
     results = {}
 
-    print(f"\n{'='*95}")
-    print(f"  {'Model':<22s} {'AUC':>6} {'PR-AUC':>8} {'Thr':>5} {'Acc':>6} {'BalAcc':>8} {'F1':>6}  {'TP':>4} {'FP':>5} {'FN':>4} {'TN':>5}")
-    print(f"{'='*95}")
+    print(f"\n{'='*105}")
+    print(f"  {'Model':<22s} {'AUC':>6} {'PR-AUC':>8} {'CIdx':>6} {'Thr':>5} {'Acc':>6} {'BalAcc':>8} {'F1':>6}  {'TP':>4} {'FP':>5} {'FN':>4} {'TN':>5}")
+    print(f"{'='*105}")
 
     for name, (model, color, ls) in tuned_models.items():
         oof_proba = np.zeros(len(y_tr))
@@ -850,21 +579,25 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
         cm = confusion_matrix(y_te, pred_bin)
         tn, fp, fn, tp = cm.ravel()
 
+        c_index = compute_recurrent_c_index_from_intervals(df_long_test, proba)
         results[name] = {
             'proba': proba, 'auc': auc, 'prauc': prauc,
+            'c_index': c_index,
             'acc': acc, 'bacc': bacc, 'f1': f1, 'threshold': best_thr,
             'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
             'model': model, 'color': color, 'ls': ls, 'oof_proba': oof_proba,
         }
 
         marker = " *" if auc == max(r['auc'] for r in results.values()) else "  "
-        print(f"{marker}{name:<22s} {auc:>5.3f} {prauc:>7.3f} {best_thr:>4.2f} {acc:>5.3f} {bacc:>7.3f} {f1:>5.3f}  {tp:>4} {fp:>5} {fn:>4} {tn:>5}")
+        print(f"{marker}{name:<22s} {auc:>5.3f} {prauc:>7.3f} {c_index:>5.3f} {best_thr:>4.2f} {acc:>5.3f} {bacc:>7.3f} {f1:>5.3f}  {tp:>4} {fp:>5} {fn:>4} {tn:>5}")
 
-    print(f"{'='*95}")
+    print(f"{'='*105}")
     best_name = max(results, key=lambda k: results[k]['auc'])
     print(f"  Best AUC: {best_name} ({results[best_name]['auc']:.3f})")
     best_prauc_name = max(results, key=lambda k: results[k]['prauc'])
     print(f"  Best PR-AUC: {best_prauc_name} ({results[best_prauc_name]['prauc']:.3f})")
+    best_cidx_name = max(results, key=lambda k: results[k]['c_index'])
+    print(f"  Best C-index: {best_cidx_name} ({results[best_cidx_name]['c_index']:.3f})")
 
     # ================= 评估增强: interval-level CI / calibration / DCA =================
     best_eval_name = best_prauc_name
@@ -931,12 +664,14 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     names = list(results.keys())
     aucs = [results[n]['auc'] for n in names]
     praucs = [results[n]['prauc'] for n in names]
+    cidxs = [results[n]['c_index'] for n in names]
 
     fig, ax = plt.subplots(figsize=(10, 5))
     x = np.arange(len(names))
-    w = 0.35
-    bars1 = ax.bar(x - w/2, aucs, w, label='ROC-AUC', color='steelblue')
-    bars2 = ax.bar(x + w/2, praucs, w, label='PR-AUC', color='coral')
+    w = 0.26
+    bars1 = ax.bar(x - w, aucs, w, label='ROC-AUC', color='steelblue')
+    bars2 = ax.bar(x, praucs, w, label='PR-AUC', color='coral')
+    bars3 = ax.bar(x + w, cidxs, w, label='C-index', color='seagreen')
 
     for b in bars1:
         ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.008,
@@ -944,13 +679,16 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     for b in bars2:
         ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.008,
                 f"{b.get_height():.3f}", ha='center', fontsize=8)
+    for b in bars3:
+        ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.008,
+                f"{b.get_height():.3f}", ha='center', fontsize=8)
 
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=25, ha='right', fontsize=9)
     ax.set_ylabel("Score")
-    ax.set_title("Model Comparison: ROC-AUC vs PR-AUC", fontsize=13)
+    ax.set_title("Model Comparison: ROC-AUC vs PR-AUC vs C-index", fontsize=13)
     ax.legend()
-    ax.set_ylim(0, max(aucs) + 0.15)
+    ax.set_ylim(0, max(max(aucs), max(praucs), max(cidxs)) + 0.15)
     ax.grid(axis='y', alpha=0.3)
     fig.tight_layout()
     fig.savefig(Config.OUT_DIR / "Model_Comparison_Bar.png", dpi=300, bbox_inches='tight')
@@ -1037,16 +775,30 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     # ================= 绘图 3: SHAP (优先解释 PR-AUC 最优模型) =================
     best_shap_name = best_prauc_name
     best_shap_model = results[best_shap_name]['model']
+    save_lr_artifacts(
+        'Logistic Reg.',
+        results['Logistic Reg.']['model'],
+        feat_names,
+        decision_threshold=results['Logistic Reg.']['threshold'],
+    )
     run_shap_analysis(best_shap_name, best_shap_model, X_tr_df, feat_names)
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--clear-cache', action='store_true', help='Clear cached .pkl files')
+    args = parser.parse_args()
+    if args.clear_cache:
+        from utils.data import clear_pkl_cache
+        clear_pkl_cache(Config.OUT_DIR)
+
     print("=" * 80)
     print("  Multi-State Relapse Analysis (Temporal-Safe MissForest)")
     print("=" * 80)
 
-    X_s_raw, ft3_raw, ft4_raw, tsh_raw, eval_raw, pids = load_data()
+    X_s_raw, ft3_raw, ft4_raw, tsh_raw, eval_raw, _, pids = _load_data()
     n_static = X_s_raw.shape[1]
-    print(f"  Records: {len(pids)}  Unique patients: {len(set(pids))}")
+    print(f"  Records: {len(pids)}")
 
     # --- Temporal split by enrollment order ---
     unique_pids = list(dict.fromkeys(pids))
@@ -1054,10 +806,10 @@ def main():
     train_pids = set(unique_pids[:split_idx])
     tr_mask = np.array([p in train_pids for p in pids])
     te_mask = ~tr_mask
-    n_train_patients = len(train_pids)
-    n_test_patients = len(unique_pids) - n_train_patients
-    print(f"  Train: {n_train_patients} patients, {tr_mask.sum()} records")
-    print(f"  Test:  {n_test_patients} patients, {te_mask.sum()} records")
+    n_train_records = int(tr_mask.sum())
+    n_test_records = int(te_mask.sum())
+    print(f"  Train: {n_train_records} records")
+    print(f"  Test:  {n_test_records} records")
 
     # --- Phase 1: Transition heatmaps (depth-6 imputer for descriptive view) ---
     print(f"\n--- Phase 1: State Transition Heatmaps ---")
@@ -1065,13 +817,10 @@ def main():
     hm_raw = np.hstack([X_s_raw, ft3_raw[:, :max_depth], ft4_raw[:, :max_depth],
                          tsh_raw[:, :max_depth], eval_raw])
     hm_imp_path = Config.OUT_DIR / f"missforest_depth{max_depth}.pkl"
-    if hm_imp_path.exists():
-        hm_imputer = joblib.load(hm_imp_path)
-        print(f"  MissForest depth-{max_depth}: loaded from cache")
-    else:
-        print(f"  MissForest depth-{max_depth}: fitting on train ({n_train_patients} patients, {tr_mask.sum()} records)...")
-        hm_imputer = fit_missforest(hm_raw[tr_mask])
-        joblib.dump(hm_imputer, hm_imp_path)
+    hm_legacy_path = Config.LEGACY_OUT_DIR / f"missforest_depth{max_depth}.pkl"
+    hm_imputer = load_or_fit_depth_imputer(
+        hm_raw[tr_mask], hm_imp_path, fallback_cache_path=hm_legacy_path, label=f"depth-{max_depth}"
+    )
     hm_filled = apply_missforest(hm_raw, hm_imputer, max_depth)
     _, _, _, _, ev_hm = split_imputed(hm_filled, n_static, max_depth, max_depth)
     S_full = build_states_from_labels(ev_hm)
@@ -1085,19 +834,17 @@ def main():
         k = depth - 1
         n_lab = depth
         n_ev = depth
-        interval_name = f"{Config.TIME_STAMPS[k]}->{Config.TIME_STAMPS[k+1]}"
+        interval_name = f"{TIME_STAMPS[k]}->{TIME_STAMPS[k+1]}"
 
         raw = np.hstack([X_s_raw,
                          ft3_raw[:, :n_lab], ft4_raw[:, :n_lab], tsh_raw[:, :n_lab],
                          eval_raw[:, :n_ev]])
 
         imp_path = Config.OUT_DIR / f"missforest_depth{depth}.pkl"
-        if imp_path.exists():
-            imputer = joblib.load(imp_path)
-        else:
-            print(f"  MissForest depth-{depth} ({interval_name}): fitting on train ({n_train_patients} patients, {tr_mask.sum()} records)...")
-            imputer = fit_missforest(raw[tr_mask])
-            joblib.dump(imputer, imp_path)
+        legacy_imp_path = Config.LEGACY_OUT_DIR / f"missforest_depth{depth}.pkl"
+        imputer = load_or_fit_depth_imputer(
+            raw[tr_mask], imp_path, fallback_cache_path=legacy_imp_path, label=f"depth-{depth} ({interval_name})"
+        )
 
         filled_tr = apply_missforest(raw[tr_mask], imputer, n_ev)
         filled_te = apply_missforest(raw[te_mask], imputer, n_ev)
