@@ -433,47 +433,67 @@ def _save_lr_parameter_shapes(model_name, lr, coef_df, intercept, out_path, deci
 
 
 def _save_lr_coefficient_flow(model_name, coef_df, intercept, out_path, top_n=8, decision_threshold=None, output_label="Predicted risk"):
+    """Coefficient flow: two stacked panels (risk-up top, protective bottom) to eliminate overlap.
+    Uses y-tick labels for feature names; beta/OR as annotations at bar tips.
+    """
     active_df = coef_df[coef_df["is_active"]].copy()
     top_neg = active_df[active_df["coef"] < 0].head(top_n).copy()
     top_pos = active_df[active_df["coef"] > 0].head(top_n).copy()
-    max_rows = max(len(top_neg), len(top_pos), 1)
-    y_vals = np.arange(max_rows)[::-1]
+    n_neg = len(top_neg)
+    n_pos = len(top_pos)
+    if n_neg == 0 and n_pos == 0:
+        return
 
-    fig, ax = plt.subplots(figsize=(15.0, 8.6))
-    ax.axvline(0.0, color="#0f172a", lw=1.4, zorder=2)
-    ax.axvspan(-1.0, 0.0, color="#eff6ff", alpha=0.65, zorder=0)
-    ax.axvspan(0.0, 1.0, color="#fff1f2", alpha=0.55, zorder=0)
+    lim = max(0.5, float(active_df["abs_coef"].head(top_n * 2).max()) * 1.4 if len(active_df) else 0.5)
+    n_panels = (1 if n_pos else 0) + (1 if n_neg else 0)
+    fig_h = max(8.0, 2.5 * n_panels + 1.2 * (n_pos + n_neg))
+    fig, axes = plt.subplots(n_panels, 1, figsize=(14.0, fig_h), squeeze=False)
+    axes = axes.ravel()
+    ax_idx = 0
 
-    if len(top_neg):
-        neg_rows = list(top_neg.itertuples(index=False))
-        for y, row in zip(y_vals[:len(neg_rows)], neg_rows):
-            edge = LR_FAMILY_COLORS.get(row.family, "#2563eb")
-            ax.barh(y, row.coef, color="#93c5fd", edgecolor=edge, linewidth=2.0, height=0.72, zorder=3)
-            ax.text(row.coef - 0.02, y, row.pretty_feature, ha="right", va="center", fontsize=10, color="#0f172a")
-            ax.text(-0.02, y - 0.26, f"beta {row.coef:+.3f} | OR {row.odds_ratio:.2f}", ha="right", va="center",
-                    fontsize=8.8, color="#475569")
+    def _draw_panel(ax, data, is_positive, title):
+        n = len(data)
+        if n == 0:
+            ax.set_axis_off()
+            return
+        y_pos = np.arange(n)
+        colors = ["#fda4af" if is_positive else "#93c5fd"] * n
+        edges = [LR_FAMILY_COLORS.get(row.family, "#dc2626" if is_positive else "#2563eb") for row in data.itertuples(index=False)]
+        coefs = data["coef"].values
+        ax.barh(y_pos, coefs, color=colors, edgecolor=edges, linewidth=1.8, height=0.7, zorder=2)
+        ax.axvline(0.0, color="#0f172a", lw=1.2, zorder=1)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(data["pretty_feature"].tolist(), fontsize=9.5)
+        ax.set_xlim(-lim if not is_positive else -0.05, lim if is_positive else 0.05)
+        ax.set_ylim(-0.6, n - 0.4)
+        ax.tick_params(axis="y", pad=8)
+        ax.set_title(title, fontsize=12, weight="bold", pad=8)
+        ax.grid(axis="x", alpha=0.25)
+        # Beta/OR annotations at bar end
+        for i, row in enumerate(data.itertuples(index=False)):
+            x = row.coef + (0.03 if is_positive else -0.03)
+            ha = "left" if is_positive else "right"
+            ax.text(x, i, f"β {row.coef:+.3f}  OR {row.odds_ratio:.2f}",
+                    ha=ha, va="center", fontsize=8.0, color="#475569", family="monospace")
 
-    if len(top_pos):
-        pos_rows = list(top_pos.itertuples(index=False))
-        for y, row in zip(y_vals[:len(pos_rows)], pos_rows):
-            edge = LR_FAMILY_COLORS.get(row.family, "#dc2626")
-            ax.barh(y, row.coef, color="#fda4af", edgecolor=edge, linewidth=2.0, height=0.72, zorder=3)
-            ax.text(row.coef + 0.02, y, row.pretty_feature, ha="left", va="center", fontsize=10, color="#0f172a")
-            ax.text(0.02, y - 0.26, f"beta {row.coef:+.3f} | OR {row.odds_ratio:.2f}", ha="left", va="center",
-                    fontsize=8.8, color="#475569")
+    if n_pos:
+        top_pos_sorted = top_pos.sort_values("coef", ascending=False).reset_index(drop=True)
+        _draw_panel(axes[ax_idx], top_pos_sorted, True, "Risk-up direction (higher relapse odds)")
+        ax_idx += 1
+    if n_neg:
+        top_neg_sorted = top_neg.sort_values("coef").reset_index(drop=True)  # most negative first
+        _draw_panel(axes[ax_idx], top_neg_sorted, False, "Protective direction (lower relapse odds)")
+        ax_idx += 1
 
-    ax.text(-0.55, max_rows - 0.15, "Protective direction\n(lower relapse odds)", ha="center", va="bottom",
-            fontsize=12, weight="bold", color="#1d4ed8")
-    ax.text(0.55, max_rows - 0.15, "Risk-up direction\n(higher relapse odds)", ha="center", va="bottom",
-            fontsize=12, weight="bold", color="#dc2626")
-    center_lines = [
-        "Center line = no change in log-odds",
+    for ax in axes[ax_idx:]:
+        ax.set_axis_off()
+
+    info_lines = [
         f"Intercept = {intercept:+.3f}",
-        f"Threshold = {decision_threshold:.2f}" if decision_threshold is not None else "Threshold selected outside plot",
+        f"Threshold = {decision_threshold:.2f}" if decision_threshold is not None else "Threshold: external",
         output_label,
     ]
-    ax.text(0.0, -0.95, "\n".join(center_lines), ha="center", va="top",
-            fontsize=10.2, color="#334155", linespacing=1.45)
+    fig.text(0.5, 0.01, "  |  ".join(info_lines), ha="center", va="bottom", fontsize=9.5, color="#64748b")
 
     legend_items = [
         Line2D([0], [0], color="#93c5fd", lw=8, label="Negative beta"),
@@ -481,20 +501,12 @@ def _save_lr_coefficient_flow(model_name, coef_df, intercept, out_path, top_n=8,
     ]
     for family in LR_FAMILY_ORDER:
         if family in active_df["family"].values:
-            legend_items.append(
-                Line2D([0], [0], color=LR_FAMILY_COLORS[family], lw=2.5, label=family)
-            )
-    ax.legend(handles=legend_items, ncol=2, fontsize=8.8, loc="lower center", bbox_to_anchor=(0.5, -0.23), frameon=False)
+            legend_items.append(Line2D([0], [0], color=LR_FAMILY_COLORS[family], lw=2.5, label=family))
+    fig.legend(handles=legend_items, ncol=2, fontsize=8.5, loc="lower center", bbox_to_anchor=(0.5, 0.045),
+               frameon=False, fancybox=False)
 
-    lim = max(0.15, float(active_df["abs_coef"].head(top_n).max()) * 1.45 if len(active_df) else 0.2)
-    ax.set_xlim(-lim, lim)
-    ax.set_ylim(-1.25, max_rows - 0.3)
-    ax.set_yticks([])
-    ax.set_xlabel("Standardized coefficient (beta)")
-    ax.set_title(f"{model_name} - coefficient flow for top retained signals", fontsize=17, weight="bold", pad=14)
-    ax.grid(axis="x", alpha=0.25)
-
-    fig.tight_layout()
+    fig.suptitle(f"{model_name} - coefficient flow for top retained signals", fontsize=16, weight="bold", y=0.98)
+    fig.tight_layout(rect=[0, 0.09, 1, 0.96])
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -532,7 +544,7 @@ def save_logistic_regression_visuals(
     _save_lr_coefficient_flow(
         model_name, coef_df, intercept,
         out_dir / f"{prefix}_Coefficient_Flow.png",
-        top_n=top_n,
+        top_n=min(top_n, 6),
         decision_threshold=decision_threshold,
         output_label=output_label,
     )

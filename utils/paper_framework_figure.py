@@ -129,12 +129,11 @@ def save_paper_method_framework(out_path):
         "i. Study cohort",
         [
             "RAI-treated Graves cohort",
-            "889 patients",
             "1003 records",
             "Visits: 0M, 1M, 3M, 6M, 12M, 18M, 24M",
             "Chronological split",
-            "Train: 711 patients / 795 records",
-            "Test: 178 patients / 208 records",
+            "Train: 795 records",
+            "Test: 208 records",
         ],
         body_size=9.6,
     )

@@ -161,10 +161,20 @@ def plot_shap_binary(model, X_tr_df, feat_names, title, filename):
     try:
         explainer = shap.TreeExplainer(model)
         sv = explainer.shap_values(X_tr_df)
+        # Binary classifier: SHAP may return list [class0, class1] or 3D array (n_samples, n_features, 2).
+        # Wrong indexing (e.g. sv[1] on 3D) yields (n_features, 2) -> only 2 features display.
         if isinstance(sv, list):
-            sv = sv[1]
+            sv = np.asarray(sv[1])
+        elif isinstance(sv, np.ndarray) and sv.ndim == 3:
+            sv = sv[:, :, 1]  # positive class: (n_samples, n_features)
+        sv = np.asarray(sv)
+        n_samples, n_feat = X_tr_df.shape
+        if sv.shape != (n_samples, n_feat):
+            print(f"    SHAP shape mismatch: sv {sv.shape} vs X {n_samples}x{n_feat}, skipping")
+            return
+        X_arr = np.asarray(X_tr_df)
         plt.figure(figsize=(10, 8))
-        shap.summary_plot(sv, X_tr_df, feature_names=feat_names, max_display=20, show=False)
+        shap.summary_plot(sv, X_arr, feature_names=list(feat_names), max_display=20, show=False)
         plt.title(title, fontsize=14, pad=20)
         plt.savefig(Config.OUT_DIR / filename, dpi=300, bbox_inches='tight')
         plt.close()
