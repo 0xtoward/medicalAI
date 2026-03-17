@@ -35,14 +35,39 @@ def _inject_styles() -> None:
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
-        html, body, [class*="css"]  {
-            font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-        }
-        .stApp {
-            background:
+        :root {
+            --app-bg:
                 radial-gradient(circle at top left, rgba(240, 204, 160, 0.28), transparent 30%),
                 radial-gradient(circle at top right, rgba(115, 148, 122, 0.18), transparent 28%),
                 linear-gradient(180deg, #f8f4ee 0%, #f2ece3 100%);
+            --card-bg: rgba(255, 255, 255, 0.78);
+            --card-border: rgba(55, 67, 43, 0.12);
+            --card-shadow: rgba(72, 66, 54, 0.08);
+            --note-bg: rgba(255, 252, 247, 0.92);
+            --note-accent: #7f6045;
+            --muted-text: #6c6358;
+            --title-text: #2f3a28;
+            --body-text: #645d54;
+        }
+        html, body, [class*="css"]  {
+            font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        }
+        [data-base-theme="dark"] {
+            --app-bg:
+                radial-gradient(circle at top left, rgba(191, 128, 64, 0.16), transparent 28%),
+                radial-gradient(circle at top right, rgba(77, 134, 110, 0.18), transparent 28%),
+                linear-gradient(180deg, #0f1715 0%, #16211f 100%);
+            --card-bg: rgba(18, 28, 26, 0.82);
+            --card-border: rgba(214, 199, 171, 0.14);
+            --card-shadow: rgba(0, 0, 0, 0.28);
+            --note-bg: rgba(22, 34, 31, 0.9);
+            --note-accent: #d49a60;
+            --muted-text: #c5b8a8;
+            --title-text: #f3eee6;
+            --body-text: #dfd4c7;
+        }
+        .stApp {
+            background: var(--app-bg);
         }
         h1, h2, h3 {
             font-family: "IBM Plex Serif", Georgia, serif;
@@ -51,15 +76,33 @@ def _inject_styles() -> None:
         .metric-card {
             padding: 1rem 1.1rem;
             border-radius: 18px;
-            background: rgba(255, 255, 255, 0.76);
-            border: 1px solid rgba(55, 67, 43, 0.12);
-            box-shadow: 0 10px 35px rgba(72, 66, 54, 0.08);
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow: 0 10px 35px var(--card-shadow);
+            backdrop-filter: blur(6px);
         }
         .note-card {
             padding: 0.9rem 1rem;
-            border-left: 4px solid #7f6045;
-            background: rgba(255, 252, 247, 0.92);
+            border-left: 4px solid var(--note-accent);
+            background: var(--note-bg);
             border-radius: 10px;
+            color: var(--body-text);
+        }
+        .metric-label {
+            font-size: 0.88rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted-text);
+        }
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: var(--title-text);
+            margin: 0.1rem 0 0.35rem 0;
+        }
+        .metric-caption {
+            font-size: 0.92rem;
+            color: var(--body-text);
         }
         </style>
         """,
@@ -88,9 +131,9 @@ def _metric_card(title: str, value: str, caption: str) -> None:
     st.markdown(
         f"""
         <div class="metric-card">
-          <div style="font-size:0.88rem; text-transform:uppercase; letter-spacing:0.08em; color:#6c6358;">{title}</div>
-          <div style="font-size:1.8rem; font-weight:600; color:#2f3a28; margin:0.1rem 0 0.35rem 0;">{value}</div>
-          <div style="font-size:0.92rem; color:#645d54;">{caption}</div>
+          <div class="metric-label">{title}</div>
+          <div class="metric-value">{value}</div>
+          <div class="metric-caption">{caption}</div>
         </div>
         """,
         unsafe_allow_html=True,
