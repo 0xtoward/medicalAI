@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Regenerate Logistic_Reg_Coefficient_Flow.png from existing coefficients CSV.
-Run this after updating the visualization code, without needing to rerun full repluse."""
+Run this after updating the visualization code, without needing to rerun full relapse."""
 
 from pathlib import Path
 import pandas as pd
 
 from utils.model_viz import _save_lr_coefficient_flow
 
-OUT_DIR = Path("./results/repluse/")
+OUT_DIR = Path("./results/relapse/")
 CSV_PATH = OUT_DIR / "Logistic_Reg_Coefficients.csv"
 
-# Intercept and threshold from last repluse run (update if needed)
+# Intercept and threshold from last relapse run (update if needed)
 INTERCEPT = -3.07
 THRESHOLD = 0.15
 
 def main():
     if not CSV_PATH.exists():
-        print(f"NotFound: {CSV_PATH}. Run repluse.py first to generate it.")
+        print(f"NotFound: {CSV_PATH}. Run relapse.py first to generate it.")
         return
     df = pd.read_csv(CSV_PATH)
     df["is_active"] = df["is_active"].astype(bool)

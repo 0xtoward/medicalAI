@@ -8,8 +8,17 @@ from utils.config import STATIC_NAMES, STATE_NAMES, TIME_STAMPS
 TIME_MONTHS = [0, 1, 3, 6, 12, 18, 24]
 
 
+def _count_prior_relapses(hist_states):
+    """Count prior Normal -> Hyper transitions before the current landmark."""
+    return int(sum(int(hist_states[m] == 1 and hist_states[m + 1] == 0) for m in range(len(hist_states) - 1)))
+
+
 def build_interval_risk_data(X_s, X_d, S_matrix, pids, target_k=None, row_ids=None):
-    """Build interval-level at-risk rows for current Normal -> next-window Hyper."""
+    """Build interval-level at-risk rows for current Normal -> next-window Hyper.
+
+    Ever_Hyper_Before is defined as whether the patient has already experienced
+    at least one prior Normal -> Hyper relapse before the current landmark.
+    """
     rows = []
     n_samples, n_timepoints = S_matrix.shape
     k_range = [target_k] if target_k is not None else range(n_timepoints - 1)
@@ -30,10 +39,8 @@ def build_interval_risk_data(X_s, X_d, S_matrix, pids, target_k=None, row_ids=No
             next_state = int(S_matrix[i, k + 1])
             hist_states = S_matrix[i, :k]
             prev_state = int(S_matrix[i, k - 1]) if k > 0 else -1
-            prior_relapse_count = int(
-                sum(int(S_matrix[i, m] == 1 and S_matrix[i, m + 1] == 0) for m in range(k))
-            )
-            ever_hyper = int(0 in hist_states)
+            prior_relapse_count = _count_prior_relapses(hist_states)
+            ever_hyper = int(prior_relapse_count > 0)
             ever_hypo = int(2 in hist_states)
             time_in_normal = int(np.sum(hist_states == 1))
 
@@ -103,7 +110,40 @@ def build_interval_risk_data(X_s, X_d, S_matrix, pids, target_k=None, row_ids=No
         "Delta_FT4_1step",
         "Delta_TSH_1step",
     ]
-    return pd.DataFrame(rows, columns=cols)
+    df = pd.DataFrame(rows, columns=cols)
+
+    int_cols = [
+        "Source_Row",
+        "Interval_ID",
+        "Y_Relapse",
+        "Prior_Relapse_Count",
+        "Event_Order",
+        "Ever_Hyper_Before",
+        "Ever_Hypo_Before",
+        "Time_In_Normal",
+    ]
+    float_cols = [
+        "Start_Time",
+        "Stop_Time",
+        "Interval_Width",
+        *STATIC_NAMES,
+        "FT3_Current",
+        "FT4_Current",
+        "logTSH_Current",
+        "Delta_FT4_k0",
+        "Delta_TSH_k0",
+        "Delta_FT4_1step",
+        "Delta_TSH_1step",
+    ]
+    str_cols = ["Patient_ID", "Interval_Name", "Next_State", "Prev_State"]
+
+    for col in int_cols:
+        df[col] = pd.Series(df[col], dtype="int64")
+    for col in float_cols:
+        df[col] = pd.Series(df[col], dtype="float64")
+    for col in str_cols:
+        df[col] = pd.Series(df[col], dtype="object")
+    return df
 
 
 def derive_recurrent_survival_data(interval_df):

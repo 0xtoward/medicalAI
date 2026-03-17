@@ -315,4 +315,4 @@ def save_paper_method_framework(out_path):
 
 
 if __name__ == "__main__":
-    save_paper_method_framework(Path("results/repluse/Paper_Method_Framework.png"))
+    save_paper_method_framework(Path("results/relapse/Paper_Method_Framework.png"))

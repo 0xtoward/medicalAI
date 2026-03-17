@@ -12,7 +12,7 @@
 为避免文章发散，建议将整篇工作组织为：
 
 - 主分析 1：固定 Landmark 的早期二分类状态识别，基于 `hyper_detect.py`
-- 主分析 2：滚动 Landmark 的动态复发预警，基于 `repluse.py`
+- 主分析 2：滚动 Landmark 的动态复发预警，基于 `relapse.py`
 - 扩展分析：固定 Landmark 的三分类状态分流，基于 `all2.py`
 
 README 以下内容按论文写作逻辑组织，尽量让医学合作者不依赖代码也能理解研究问题、方法、结果和图示含义。
@@ -119,7 +119,7 @@ RAI 治疗后纵向随访
 
 ### 3.3 Interval-level 和 patient-level 的区别
 
-这部分主要属于 `repluse.py` 的结果表达方式。
+这部分主要属于 `relapse.py` 的结果表达方式。
 
 #### Interval-level
 
@@ -177,7 +177,7 @@ $$
 | 分析层级 | 脚本 | 目标 | 论文角色 |
 |---|---|---|---|
 | 固定 Landmark 二分类 | `hyper_detect.py` | `3M/6M` 时点识别 `Hyper vs Non-Hyper` | 主分析 1 |
-| 滚动 Landmark 复发预测 | `repluse.py` | 对正常患者预测下一次是否复发 | 主分析 2 |
+| 滚动 Landmark 复发预测 | `relapse.py` | 对正常患者预测下一次是否复发 | 主分析 2 |
 | 固定 Landmark 三分类 | `all2.py` | `3M/6M` 时点分流到 `Hyper / Normal / Hypo` | 扩展分析 / 补充材料 |
 
 ### 4.2 防泄漏设计
@@ -213,7 +213,7 @@ $$
 
 #### 滚动 Landmark 模块
 
-`repluse.py` 除上述信息外，还进一步加入：
+`relapse.py` 除上述信息外，还进一步加入：
 
 - 当前实验室值：`FT3_Current`、`FT4_Current`、`logTSH_Current`
 - 历史状态记忆：`Ever_Hyper_Before`、`Ever_Hypo_Before`、`Time_In_Normal`
@@ -221,7 +221,7 @@ $$
 - 时间窗口变量：`Window_*`
 - 既往状态变量：`PrevState_*`
 
-因此，`repluse.py` 更适合承担文章中的方法学亮点。
+因此，`relapse.py` 更适合承担文章中的方法学亮点。
 
 ---
 
@@ -389,7 +389,7 @@ $$
 - 能输出不同随访窗口下的条件风险
 - 能自然扩展到 patient-level 风险分层和 DCA
 
-因此整篇 paper 中，`repluse.py` 更适合作为“方法学新意”和“临床随访管理价值”的核心支撑。
+因此整篇 paper 中，`relapse.py` 更适合作为“方法学新意”和“临床随访管理价值”的核心支撑。
 
 ---
 
@@ -409,7 +409,7 @@ $$
 - `Hybrid(MLP+GBDT)`
 - `Ensemble(Soft)`
 
-但如果把它也放进主文与 `hyper_detect.py`、`repluse.py` 并列，会带来两个问题：
+但如果把它也放进主文与 `hyper_detect.py`、`relapse.py` 并列，会带来两个问题：
 
 - 文章目标显得过于分散
 - 医学读者容易看不清主问题到底是“当前状态识别”还是“未来复发预测”
@@ -536,7 +536,7 @@ $$
 2. 状态定义：`Hyper / Normal / Hypo`
 3. 两个主终点与一个扩展终点
 4. 固定 Landmark 建模：`hyper_detect.py`
-5. 滚动 Landmark 建模：`repluse.py`
+5. 滚动 Landmark 建模：`relapse.py`
 6. 三分类扩展：`all2.py`
 7. 防泄漏设计
 8. 评估指标：`AUC`、`PR-AUC`、`Recall`、`Specificity`、`Brier`、`Calibration`、`DCA`
@@ -643,7 +643,7 @@ $$
 | 脚本 | 当前定位 | 建议论文角色 |
 |---|---|---|
 | `hyper_detect.py` | 固定 Landmark 二分类甲亢识别 | 主分析 1 |
-| `repluse.py` | 滚动 Landmark 动态复发预警 | 主分析 2 / 方法学亮点 |
+| `relapse.py` | 滚动 Landmark 动态复发预警 | 主分析 2 / 方法学亮点 |
 | `all2.py` | 固定 Landmark 三分类分流 | 扩展分析 / 补充材料 |
 | `causal.py` | 剂量因果异质性分析 | 独立后续工作或另一篇论文 |
 | `cluster.py` | 轨迹聚类 | 机制探索或另一篇论文 |
@@ -712,7 +712,7 @@ conda activate med
 
 ```bash
 python hyper_detect.py
-python repluse.py
+python relapse.py
 python all2.py
 python causal.py
 python cluster.py

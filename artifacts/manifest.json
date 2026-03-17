@@ -1,0 +1,361 @@
+{
+  "version": "v1",
+  "ui_language": "en",
+  "artifacts_root": "artifacts",
+  "tasks": {
+    "relapse": {
+      "bundle_path": "artifacts/relapse/bundle.joblib",
+      "current_landmarks": [
+        "1M",
+        "3M",
+        "6M",
+        "12M",
+        "18M"
+      ],
+      "required_static_fields": [
+        "Sex",
+        "Age",
+        "Height",
+        "Weight",
+        "BMI",
+        "Exophthalmos",
+        "ThyroidW",
+        "RAI3d",
+        "TreatCount",
+        "TGAb",
+        "TPOAb",
+        "TRAb",
+        "Uptake24h",
+        "MaxUptake",
+        "HalfLife",
+        "Dose"
+      ],
+      "required_state_semantics": "Current state must be Normal for relapse prediction.",
+      "test_metrics": {
+        "auc": 0.841386067137627,
+        "prauc": 0.333887622324112,
+        "brier": 0.06388086865989832,
+        "acc": 0.7957198443579766,
+        "bacc": 0.7442118290104678,
+        "f1": 0.34782608695652173,
+        "recall": 0.6829268292682927,
+        "specificity": 0.8054968287526427,
+        "tp": 28.0,
+        "fp": 92.0,
+        "fn": 13.0,
+        "tn": 381.0,
+        "threshold": 0.12999999999999998
+      },
+      "patient_test_metrics": {
+        "auc": 0.7488708220415538,
+        "prauc": 0.4529085447315304,
+        "brier": 0.1544816484602316,
+        "acc": 0.6540880503144654,
+        "bacc": 0.6683604336043361,
+        "f1": 0.47619047619047616,
+        "recall": 0.6944444444444444,
+        "specificity": 0.6422764227642277,
+        "tp": 25.0,
+        "fp": 44.0,
+        "fn": 11.0,
+        "tn": 79.0,
+        "threshold": 0.25000000000000006
+      },
+      "decision_threshold": 0.12999999999999998,
+      "patient_aggregation_threshold": 0.25000000000000006,
+      "projection_method": "constant_next_window_risk",
+      "global_drivers": [
+        {
+          "feature": "Time_In_Normal",
+          "coefficient": -0.7660415564763493
+        },
+        {
+          "feature": "Ever_Hypo_Before",
+          "coefficient": -0.3844800859755234
+        },
+        {
+          "feature": "ThyroidW",
+          "coefficient": 0.36744799820904367
+        },
+        {
+          "feature": "FT3_Current",
+          "coefficient": 0.3059281720443097
+        },
+        {
+          "feature": "Delta_TSH_k0",
+          "coefficient": -0.2312552539945807
+        },
+        {
+          "feature": "Window_12M->18M",
+          "coefficient": -0.07194661154216986
+        },
+        {
+          "feature": "logTSH_Current",
+          "coefficient": -0.07049014047270677
+        },
+        {
+          "feature": "FT4_Current",
+          "coefficient": -0.054254422977222785
+        },
+        {
+          "feature": "Window_18M->24M",
+          "coefficient": -0.05289081988495563
+        },
+        {
+          "feature": "Window_6M->12M",
+          "coefficient": 0.04870078854520607
+        }
+      ]
+    },
+    "fixed_3m": {
+      "bundle_path": "artifacts/fixed_3m/bundle.joblib",
+      "landmark": "3M",
+      "test_metrics": {
+        "auc": 0.8470703125,
+        "prauc": 0.7766414512300992,
+        "brier": 0.16187461754122057,
+        "acc": 0.7932692307692307,
+        "bacc": 0.778125,
+        "f1": 0.7261146496815286,
+        "recall": 0.7125,
+        "specificity": 0.84375,
+        "tp": 57.0,
+        "fp": 20.0,
+        "fn": 23.0,
+        "tn": 108.0,
+        "threshold": 0.5300000000000001
+      },
+      "decision_threshold": 0.5300000000000001,
+      "model_name": "Balanced RF",
+      "global_drivers": [
+        {
+          "feature": "FT3_3M",
+          "importance": 0.2205435075039284
+        },
+        {
+          "feature": "FT4_3M",
+          "importance": 0.16199003020423794
+        },
+        {
+          "feature": "TSH_3M",
+          "importance": 0.13407116965001667
+        },
+        {
+          "feature": "D_TSH_3M-0M",
+          "importance": 0.12242391576800236
+        },
+        {
+          "feature": "ThyroidW",
+          "importance": 0.0775853284512325
+        },
+        {
+          "feature": "D_FT4_3M-0M",
+          "importance": 0.041411743185963565
+        },
+        {
+          "feature": "RAI3d",
+          "importance": 0.038786749379943274
+        },
+        {
+          "feature": "FT4_1M",
+          "importance": 0.03580070909221159
+        },
+        {
+          "feature": "FT3_1M",
+          "importance": 0.030866825817610383
+        },
+        {
+          "feature": "D_FT3_3M-0M",
+          "importance": 0.030746215857734852
+        }
+      ]
+    },
+    "fixed_6m": {
+      "bundle_path": "artifacts/fixed_6m/bundle.joblib",
+      "landmark": "6M",
+      "test_metrics": {
+        "auc": 0.90439453125,
+        "prauc": 0.8518525109177237,
+        "brier": 0.11441179635158776,
+        "acc": 0.8269230769230769,
+        "bacc": 0.83828125,
+        "f1": 0.797752808988764,
+        "recall": 0.8875,
+        "specificity": 0.7890625,
+        "tp": 71.0,
+        "fp": 27.0,
+        "fn": 9.0,
+        "tn": 101.0,
+        "threshold": 0.42000000000000004
+      },
+      "decision_threshold": 0.42000000000000004,
+      "model_name": "Random Forest",
+      "global_drivers": [
+        {
+          "feature": "FT3_3M",
+          "importance": 0.24863089602637778
+        },
+        {
+          "feature": "FT3_6M",
+          "importance": 0.19836996044584163
+        },
+        {
+          "feature": "FT4_3M",
+          "importance": 0.07956331945294302
+        },
+        {
+          "feature": "TSH_6M",
+          "importance": 0.07217104951192997
+        },
+        {
+          "feature": "TSH_3M",
+          "importance": 0.07091717660206012
+        },
+        {
+          "feature": "D_TSH_6M-0M",
+          "importance": 0.04417772887005372
+        },
+        {
+          "feature": "D_FT3_6M-3M",
+          "importance": 0.03741004476988115
+        },
+        {
+          "feature": "ThyroidW",
+          "importance": 0.03196397880125237
+        },
+        {
+          "feature": "FT4_6M",
+          "importance": 0.03158875535643278
+        },
+        {
+          "feature": "D_TSH_3M-0M",
+          "importance": 0.0312550749248062
+        }
+      ]
+    }
+  },
+  "sample_cases": {
+    "relapse": {
+      "static": {
+        "Sex": 1.0,
+        "Age": 73.0,
+        "Height": 1.7159998724891858,
+        "Weight": 60.56707847635917,
+        "BMI": 20.827373385465783,
+        "Exophthalmos": 1.0,
+        "ThyroidW": 47.1,
+        "RAI3d": 5.1,
+        "TreatCount": 1.0,
+        "TGAb": 20.0,
+        "TPOAb": 75.6,
+        "TRAb": 8.84,
+        "Uptake24h": 0.673,
+        "MaxUptake": 0.76,
+        "HalfLife": 5.1,
+        "Dose": 10.0
+      },
+      "series": {
+        "FT3": {
+          "0M": 6.13,
+          "1M": 3.32
+        },
+        "FT4": {
+          "0M": 11.93,
+          "1M": 9.29
+        },
+        "TSH": {
+          "0M": 0.036,
+          "1M": 0.585
+        }
+      },
+      "landmark": "1M",
+      "states": {
+        "1M": "Normal"
+      },
+      "expected_probability": 0.1407962553700759
+    },
+    "fixed": {
+      "3M": {
+        "static": {
+          "Sex": 1.0,
+          "Age": 73.0,
+          "Height": 1.7143423106170892,
+          "Weight": 60.72411647144119,
+          "BMI": 20.96565884840716,
+          "Exophthalmos": 1.0,
+          "ThyroidW": 47.1,
+          "RAI3d": 5.1,
+          "TreatCount": 1.0,
+          "TGAb": 20.0,
+          "TPOAb": 75.6,
+          "TRAb": 8.84,
+          "Uptake24h": 0.673,
+          "MaxUptake": 0.76,
+          "HalfLife": 5.1,
+          "Dose": 10.0
+        },
+        "series": {
+          "FT3": {
+            "0M": 6.13,
+            "1M": 3.32,
+            "3M": 9.42
+          },
+          "FT4": {
+            "0M": 11.93,
+            "1M": 9.29,
+            "3M": 25.86
+          },
+          "TSH": {
+            "0M": 0.036,
+            "1M": 0.585,
+            "3M": 0.004
+          }
+        },
+        "states": {},
+        "landmark": "3M"
+      },
+      "6M": {
+        "static": {
+          "Sex": 1.0,
+          "Age": 73.0,
+          "Height": 1.7234517595578844,
+          "Weight": 60.77803192568763,
+          "BMI": 20.854908256039952,
+          "Exophthalmos": 1.0,
+          "ThyroidW": 47.1,
+          "RAI3d": 5.1,
+          "TreatCount": 1.0,
+          "TGAb": 20.0,
+          "TPOAb": 75.6,
+          "TRAb": 8.84,
+          "Uptake24h": 0.673,
+          "MaxUptake": 0.76,
+          "HalfLife": 5.1,
+          "Dose": 10.0
+        },
+        "series": {
+          "FT3": {
+            "0M": 6.13,
+            "1M": 3.32,
+            "3M": 9.42,
+            "6M": 4.148531703272368
+          },
+          "FT4": {
+            "0M": 11.93,
+            "1M": 9.29,
+            "3M": 25.86,
+            "6M": 11.458182605010759
+          },
+          "TSH": {
+            "0M": 0.036,
+            "1M": 0.585,
+            "3M": 0.004,
+            "6M": 3.7337034784661487
+          }
+        },
+        "states": {},
+        "landmark": "6M"
+      }
+    }
+  }
+}
