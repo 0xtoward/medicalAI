@@ -18,7 +18,7 @@ from thyroid_app.constants import (
     required_timestamps_for_landmark,
     timestamp_to_index,
 )
-from thyroid_app.training import _make_relapse_features
+from thyroid_app.features import make_relapse_features
 from utils.config import STATIC_NAMES, TIME_STAMPS
 from utils.data import extract_flat_features
 
@@ -130,7 +130,7 @@ def _build_relapse_feature_row(case_payload: dict, landmark: str, bundle: dict) 
             }
         ]
     )
-    return _make_relapse_features(row, bundle["interval_categories"], bundle["prev_state_categories"])
+    return make_relapse_features(row, bundle["interval_categories"], bundle["prev_state_categories"])
 
 
 def _build_fixed_feature_row(case_payload: dict, landmark: str, bundle: dict) -> pd.DataFrame:

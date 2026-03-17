@@ -24,8 +24,8 @@ from sklearn.svm import SVC
 from thyroid_app.constants import (
     FIXED_LANDMARKS,
     RELAPSE_CURRENT_LANDMARKS,
-    RELAPSE_FEATURE_COLUMNS,
 )
+from thyroid_app.features import make_relapse_features
 from utils.config import SEED, STATIC_NAMES
 from utils.data import (
     apply_missforest,
@@ -213,15 +213,6 @@ def _serialize_metrics(metrics: dict[str, float]) -> dict[str, float]:
     return out
 
 
-def _make_relapse_features(df: pd.DataFrame, interval_categories: list[str], prev_state_categories: list[str]) -> pd.DataFrame:
-    out = df[RELAPSE_FEATURE_COLUMNS].copy().reset_index(drop=True)
-    for category in interval_categories:
-        out[f"Window_{category}"] = (df["Interval_Name"].values == category).astype(float)
-    for category in prev_state_categories:
-        out[f"PrevState_{category}"] = (df["Prev_State"].values == category).astype(float)
-    return out.apply(pd.to_numeric, errors="coerce").astype(float)
-
-
 def build_relapse_datasets(cache_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     x_static_raw, ft3_raw, ft4_raw, tsh_raw, eval_raw, _, pids = load_data()
     n_static = x_static_raw.shape[1]
@@ -263,8 +254,8 @@ def export_relapse_artifact(paths: ExportPaths) -> dict:
     df_train, df_test = build_relapse_datasets(paths.cache)
     interval_categories = sorted(df_train["Interval_Name"].unique())
     prev_state_categories = sorted(df_train["Prev_State"].astype(str).unique())
-    x_train = _make_relapse_features(df_train, interval_categories, prev_state_categories)
-    x_test = _make_relapse_features(df_test, interval_categories, prev_state_categories)
+    x_train = make_relapse_features(df_train, interval_categories, prev_state_categories)
+    x_test = make_relapse_features(df_test, interval_categories, prev_state_categories)
     y_train = df_train["Y_Relapse"].values.astype(int)
     y_test = df_test["Y_Relapse"].values.astype(int)
     groups = df_train["Patient_ID"].values
@@ -546,7 +537,7 @@ def _build_sample_cases(paths: ExportPaths, relapse_bundle: dict) -> dict:
         relapse_case["states"] = relapse_states
         relapse_case["expected_probability"] = float(
             relapse_bundle["model"].predict_proba(
-                _make_relapse_features(
+                make_relapse_features(
                     interval_df.iloc[[0]],
                     relapse_bundle["interval_categories"],
                     relapse_bundle["prev_state_categories"],
