@@ -1,0 +1,181 @@
+Task,Domain,Domain_Label,Model,Metric_Key,Metric,Value,Threshold,N,Events
+3-Month,Train_Fit,Train Fit,Logistic Reg.,auc,AUC,0.8670042643923241,0.32000000000000006,795,259
+3-Month,Train_Fit,Train Fit,Logistic Reg.,recall,Sensitivity,0.7181467181467182,0.32000000000000006,795,259
+3-Month,Train_Fit,Train Fit,Logistic Reg.,specificity,Specificity,0.8246268656716418,0.32000000000000006,795,259
+3-Month,Train_Fit,Train Fit,Logistic Reg.,f1,F1,0.6901669758812616,0.32000000000000006,795,259
+3-Month,Train_Fit,Train Fit,Logistic Reg.,bacc,Balanced Acc,0.7713867919091799,0.32000000000000006,795,259
+3-Month,Validation_OOF,Validation OOF,Logistic Reg.,auc,AUC,0.8521653316429435,0.32000000000000006,795,259
+3-Month,Validation_OOF,Validation OOF,Logistic Reg.,recall,Sensitivity,0.722007722007722,0.32000000000000006,795,259
+3-Month,Validation_OOF,Validation OOF,Logistic Reg.,specificity,Specificity,0.8302238805970149,0.32000000000000006,795,259
+3-Month,Validation_OOF,Validation OOF,Logistic Reg.,f1,F1,0.6964618249534451,0.32000000000000006,795,259
+3-Month,Validation_OOF,Validation OOF,Logistic Reg.,bacc,Balanced Acc,0.7761158013023685,0.32000000000000006,795,259
+3-Month,Test_Temporal,Temporal Test,Logistic Reg.,auc,AUC,0.8384765625,0.32000000000000006,208,80
+3-Month,Test_Temporal,Temporal Test,Logistic Reg.,recall,Sensitivity,0.7625,0.32000000000000006,208,80
+3-Month,Test_Temporal,Temporal Test,Logistic Reg.,specificity,Specificity,0.78125,0.32000000000000006,208,80
+3-Month,Test_Temporal,Temporal Test,Logistic Reg.,f1,F1,0.7218934911242604,0.32000000000000006,208,80
+3-Month,Test_Temporal,Temporal Test,Logistic Reg.,bacc,Balanced Acc,0.771875,0.32000000000000006,208,80
+3-Month,Train_Fit,Train Fit,Elastic LR,auc,AUC,0.8675589235290728,0.34,795,259
+3-Month,Train_Fit,Train Fit,Elastic LR,recall,Sensitivity,0.6988416988416989,0.34,795,259
+3-Month,Train_Fit,Train Fit,Elastic LR,specificity,Specificity,0.832089552238806,0.34,795,259
+3-Month,Train_Fit,Train Fit,Elastic LR,f1,F1,0.6830188679245283,0.34,795,259
+3-Month,Train_Fit,Train Fit,Elastic LR,bacc,Balanced Acc,0.7654656255402524,0.34,795,259
+3-Month,Validation_OOF,Validation OOF,Elastic LR,auc,AUC,0.8493632224975508,0.34,795,259
+3-Month,Validation_OOF,Validation OOF,Elastic LR,recall,Sensitivity,0.6872586872586872,0.34,795,259
+3-Month,Validation_OOF,Validation OOF,Elastic LR,specificity,Specificity,0.8432835820895522,0.34,795,259
+3-Month,Validation_OOF,Validation OOF,Elastic LR,f1,F1,0.6833013435700576,0.34,795,259
+3-Month,Validation_OOF,Validation OOF,Elastic LR,bacc,Balanced Acc,0.7652711346741197,0.34,795,259
+3-Month,Test_Temporal,Temporal Test,Elastic LR,auc,AUC,0.8386718750000001,0.34,208,80
+3-Month,Test_Temporal,Temporal Test,Elastic LR,recall,Sensitivity,0.7625,0.34,208,80
+3-Month,Test_Temporal,Temporal Test,Elastic LR,specificity,Specificity,0.8046875,0.34,208,80
+3-Month,Test_Temporal,Temporal Test,Elastic LR,f1,F1,0.7349397590361446,0.34,208,80
+3-Month,Test_Temporal,Temporal Test,Elastic LR,bacc,Balanced Acc,0.78359375,0.34,208,80
+3-Month,Train_Fit,Train Fit,SVM,auc,AUC,0.8891113928427362,0.37000000000000005,795,259
+3-Month,Train_Fit,Train Fit,SVM,recall,Sensitivity,0.752895752895753,0.37000000000000005,795,259
+3-Month,Train_Fit,Train Fit,SVM,specificity,Specificity,0.8638059701492538,0.37000000000000005,795,259
+3-Month,Train_Fit,Train Fit,SVM,f1,F1,0.7400379506641366,0.37000000000000005,795,259
+3-Month,Train_Fit,Train Fit,SVM,bacc,Balanced Acc,0.8083508615225034,0.37000000000000005,795,259
+3-Month,Validation_OOF,Validation OOF,SVM,auc,AUC,0.8394189765458424,0.37000000000000005,795,259
+3-Month,Validation_OOF,Validation OOF,SVM,recall,Sensitivity,0.6872586872586872,0.37000000000000005,795,259
+3-Month,Validation_OOF,Validation OOF,SVM,specificity,Specificity,0.832089552238806,0.37000000000000005,795,259
+3-Month,Validation_OOF,Validation OOF,SVM,f1,F1,0.6755218216318786,0.37000000000000005,795,259
+3-Month,Validation_OOF,Validation OOF,SVM,bacc,Balanced Acc,0.7596741197487467,0.37000000000000005,795,259
+3-Month,Test_Temporal,Temporal Test,SVM,auc,AUC,0.83583984375,0.37000000000000005,208,80
+3-Month,Test_Temporal,Temporal Test,SVM,recall,Sensitivity,0.75,0.37000000000000005,208,80
+3-Month,Test_Temporal,Temporal Test,SVM,specificity,Specificity,0.8046875,0.37000000000000005,208,80
+3-Month,Test_Temporal,Temporal Test,SVM,f1,F1,0.7272727272727273,0.37000000000000005,208,80
+3-Month,Test_Temporal,Temporal Test,SVM,bacc,Balanced Acc,0.77734375,0.37000000000000005,208,80
+3-Month,Train_Fit,Train Fit,Random Forest,auc,AUC,0.9413501988128854,0.4100000000000001,795,259
+3-Month,Train_Fit,Train Fit,Random Forest,recall,Sensitivity,0.9111969111969112,0.4100000000000001,795,259
+3-Month,Train_Fit,Train Fit,Random Forest,specificity,Specificity,0.8041044776119403,0.4100000000000001,795,259
+3-Month,Train_Fit,Train Fit,Random Forest,f1,F1,0.7866666666666666,0.4100000000000001,795,259
+3-Month,Train_Fit,Train Fit,Random Forest,bacc,Balanced Acc,0.8576506944044258,0.4100000000000001,795,259
+3-Month,Validation_OOF,Validation OOF,Random Forest,auc,AUC,0.8500115253846597,0.4100000000000001,795,259
+3-Month,Validation_OOF,Validation OOF,Random Forest,recall,Sensitivity,0.7992277992277992,0.4100000000000001,795,259
+3-Month,Validation_OOF,Validation OOF,Random Forest,specificity,Specificity,0.7574626865671642,0.4100000000000001,795,259
+3-Month,Validation_OOF,Validation OOF,Random Forest,f1,F1,0.6946308724832215,0.4100000000000001,795,259
+3-Month,Validation_OOF,Validation OOF,Random Forest,bacc,Balanced Acc,0.7783452428974817,0.4100000000000001,795,259
+3-Month,Test_Temporal,Temporal Test,Random Forest,auc,AUC,0.8490234375000001,0.4100000000000001,208,80
+3-Month,Test_Temporal,Temporal Test,Random Forest,recall,Sensitivity,0.8125,0.4100000000000001,208,80
+3-Month,Test_Temporal,Temporal Test,Random Forest,specificity,Specificity,0.75,0.4100000000000001,208,80
+3-Month,Test_Temporal,Temporal Test,Random Forest,f1,F1,0.7344632768361582,0.4100000000000001,208,80
+3-Month,Test_Temporal,Temporal Test,Random Forest,bacc,Balanced Acc,0.78125,0.4100000000000001,208,80
+3-Month,Train_Fit,Train Fit,Balanced RF,auc,AUC,0.8937215467066214,0.5900000000000002,795,259
+3-Month,Train_Fit,Train Fit,Balanced RF,recall,Sensitivity,0.7065637065637066,0.5900000000000002,795,259
+3-Month,Train_Fit,Train Fit,Balanced RF,specificity,Specificity,0.8880597014925373,0.5900000000000002,795,259
+3-Month,Train_Fit,Train Fit,Balanced RF,f1,F1,0.7290836653386454,0.5900000000000002,795,259
+3-Month,Train_Fit,Train Fit,Balanced RF,bacc,Balanced Acc,0.7973117040281219,0.5900000000000002,795,259
+3-Month,Validation_OOF,Validation OOF,Balanced RF,auc,AUC,0.8488301734570391,0.5900000000000002,795,259
+3-Month,Validation_OOF,Validation OOF,Balanced RF,recall,Sensitivity,0.6640926640926641,0.5900000000000002,795,259
+3-Month,Validation_OOF,Validation OOF,Balanced RF,specificity,Specificity,0.8768656716417911,0.5900000000000002,795,259
+3-Month,Validation_OOF,Validation OOF,Balanced RF,f1,F1,0.6921529175050302,0.5900000000000002,795,259
+3-Month,Validation_OOF,Validation OOF,Balanced RF,bacc,Balanced Acc,0.7704791678672276,0.5900000000000002,795,259
+3-Month,Test_Temporal,Temporal Test,Balanced RF,auc,AUC,0.8448242187500001,0.5900000000000002,208,80
+3-Month,Test_Temporal,Temporal Test,Balanced RF,recall,Sensitivity,0.6875,0.5900000000000002,208,80
+3-Month,Test_Temporal,Temporal Test,Balanced RF,specificity,Specificity,0.8515625,0.5900000000000002,208,80
+3-Month,Test_Temporal,Temporal Test,Balanced RF,f1,F1,0.7142857142857143,0.5900000000000002,208,80
+3-Month,Test_Temporal,Temporal Test,Balanced RF,bacc,Balanced Acc,0.76953125,0.5900000000000002,208,80
+3-Month,Train_Fit,Train Fit,MLP,auc,AUC,0.8562280297354925,0.33,795,259
+3-Month,Train_Fit,Train Fit,MLP,recall,Sensitivity,0.7760617760617761,0.33,795,259
+3-Month,Train_Fit,Train Fit,MLP,specificity,Specificity,0.7705223880597015,0.33,795,259
+3-Month,Train_Fit,Train Fit,MLP,f1,F1,0.6895368782161235,0.33,795,259
+3-Month,Train_Fit,Train Fit,MLP,bacc,Balanced Acc,0.7732920820607387,0.33,795,259
+3-Month,Validation_OOF,Validation OOF,MLP,auc,AUC,0.8313836224283985,0.33,795,259
+3-Month,Validation_OOF,Validation OOF,MLP,recall,Sensitivity,0.722007722007722,0.33,795,259
+3-Month,Validation_OOF,Validation OOF,MLP,specificity,Specificity,0.7835820895522388,0.33,795,259
+3-Month,Validation_OOF,Validation OOF,MLP,f1,F1,0.6654804270462633,0.33,795,259
+3-Month,Validation_OOF,Validation OOF,MLP,bacc,Balanced Acc,0.7527949057799804,0.33,795,259
+3-Month,Test_Temporal,Temporal Test,MLP,auc,AUC,0.79599609375,0.33,208,80
+3-Month,Test_Temporal,Temporal Test,MLP,recall,Sensitivity,0.7375,0.33,208,80
+3-Month,Test_Temporal,Temporal Test,MLP,specificity,Specificity,0.71875,0.33,208,80
+3-Month,Test_Temporal,Temporal Test,MLP,f1,F1,0.6742857142857143,0.33,208,80
+3-Month,Test_Temporal,Temporal Test,MLP,bacc,Balanced Acc,0.728125,0.33,208,80
+6-Month,Train_Fit,Train Fit,Logistic Reg.,auc,AUC,0.9150002881346165,0.28,795,259
+6-Month,Train_Fit,Train Fit,Logistic Reg.,recall,Sensitivity,0.8262548262548263,0.28,795,259
+6-Month,Train_Fit,Train Fit,Logistic Reg.,specificity,Specificity,0.8395522388059702,0.28,795,259
+6-Month,Train_Fit,Train Fit,Logistic Reg.,f1,F1,0.7656529516994633,0.28,795,259
+6-Month,Train_Fit,Train Fit,Logistic Reg.,bacc,Balanced Acc,0.8329035325303982,0.28,795,259
+6-Month,Validation_OOF,Validation OOF,Logistic Reg.,auc,AUC,0.9075376015674524,0.28,795,259
+6-Month,Validation_OOF,Validation OOF,Logistic Reg.,recall,Sensitivity,0.8223938223938224,0.28,795,259
+6-Month,Validation_OOF,Validation OOF,Logistic Reg.,specificity,Specificity,0.8339552238805971,0.28,795,259
+6-Month,Validation_OOF,Validation OOF,Logistic Reg.,f1,F1,0.7593582887700535,0.28,795,259
+6-Month,Validation_OOF,Validation OOF,Logistic Reg.,bacc,Balanced Acc,0.8281745231372097,0.28,795,259
+6-Month,Test_Temporal,Temporal Test,Logistic Reg.,auc,AUC,0.89794921875,0.28,208,80
+6-Month,Test_Temporal,Temporal Test,Logistic Reg.,recall,Sensitivity,0.8625,0.28,208,80
+6-Month,Test_Temporal,Temporal Test,Logistic Reg.,specificity,Specificity,0.8125,0.28,208,80
+6-Month,Test_Temporal,Temporal Test,Logistic Reg.,f1,F1,0.7976878612716763,0.28,208,80
+6-Month,Test_Temporal,Temporal Test,Logistic Reg.,bacc,Balanced Acc,0.8375,0.28,208,80
+6-Month,Train_Fit,Train Fit,Elastic LR,auc,AUC,0.9135235982250907,0.29000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Elastic LR,recall,Sensitivity,0.8108108108108109,0.29000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Elastic LR,specificity,Specificity,0.8507462686567164,0.29000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Elastic LR,f1,F1,0.7650273224043715,0.29000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Elastic LR,bacc,Balanced Acc,0.8307785397337637,0.29000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Elastic LR,auc,AUC,0.9035901573215008,0.29000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Elastic LR,recall,Sensitivity,0.7992277992277992,0.29000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Elastic LR,specificity,Specificity,0.8432835820895522,0.29000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Elastic LR,f1,F1,0.7527272727272727,0.29000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Elastic LR,bacc,Balanced Acc,0.8212556906586757,0.29000000000000004,795,259
+6-Month,Test_Temporal,Temporal Test,Elastic LR,auc,AUC,0.8952148437499999,0.29000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Elastic LR,recall,Sensitivity,0.825,0.29000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Elastic LR,specificity,Specificity,0.8125,0.29000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Elastic LR,f1,F1,0.7764705882352941,0.29000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Elastic LR,bacc,Balanced Acc,0.81875,0.29000000000000004,208,80
+6-Month,Train_Fit,Train Fit,SVM,auc,AUC,0.9309197256958452,0.44000000000000006,795,259
+6-Month,Train_Fit,Train Fit,SVM,recall,Sensitivity,0.7760617760617761,0.44000000000000006,795,259
+6-Month,Train_Fit,Train Fit,SVM,specificity,Specificity,0.917910447761194,0.44000000000000006,795,259
+6-Month,Train_Fit,Train Fit,SVM,f1,F1,0.7976190476190477,0.44000000000000006,795,259
+6-Month,Train_Fit,Train Fit,SVM,bacc,Balanced Acc,0.846986111911485,0.44000000000000006,795,259
+6-Month,Validation_OOF,Validation OOF,SVM,auc,AUC,0.8833270904166426,0.44000000000000006,795,259
+6-Month,Validation_OOF,Validation OOF,SVM,recall,Sensitivity,0.7027027027027027,0.44000000000000006,795,259
+6-Month,Validation_OOF,Validation OOF,SVM,specificity,Specificity,0.9011194029850746,0.44000000000000006,795,259
+6-Month,Validation_OOF,Validation OOF,SVM,f1,F1,0.7368421052631579,0.44000000000000006,795,259
+6-Month,Validation_OOF,Validation OOF,SVM,bacc,Balanced Acc,0.8019110528438886,0.44000000000000006,795,259
+6-Month,Test_Temporal,Temporal Test,SVM,auc,AUC,0.88916015625,0.44000000000000006,208,80
+6-Month,Test_Temporal,Temporal Test,SVM,recall,Sensitivity,0.725,0.44000000000000006,208,80
+6-Month,Test_Temporal,Temporal Test,SVM,specificity,Specificity,0.90625,0.44000000000000006,208,80
+6-Month,Test_Temporal,Temporal Test,SVM,f1,F1,0.7733333333333333,0.44000000000000006,208,80
+6-Month,Test_Temporal,Temporal Test,SVM,bacc,Balanced Acc,0.815625,0.44000000000000006,208,80
+6-Month,Train_Fit,Train Fit,Random Forest,auc,AUC,0.973556445571371,0.42000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Random Forest,recall,Sensitivity,0.9382239382239382,0.42000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Random Forest,specificity,Specificity,0.8544776119402985,0.42000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Random Forest,f1,F1,0.8379310344827586,0.42000000000000004,795,259
+6-Month,Train_Fit,Train Fit,Random Forest,bacc,Balanced Acc,0.8963507750821184,0.42000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Random Forest,auc,AUC,0.9151515588082753,0.42000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Random Forest,recall,Sensitivity,0.8957528957528957,0.42000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Random Forest,specificity,Specificity,0.8115671641791045,0.42000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Random Forest,f1,F1,0.7837837837837838,0.42000000000000004,795,259
+6-Month,Validation_OOF,Validation OOF,Random Forest,bacc,Balanced Acc,0.8536600299660001,0.42000000000000004,795,259
+6-Month,Test_Temporal,Temporal Test,Random Forest,auc,AUC,0.90439453125,0.42000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Random Forest,recall,Sensitivity,0.8875,0.42000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Random Forest,specificity,Specificity,0.7890625,0.42000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Random Forest,f1,F1,0.797752808988764,0.42000000000000004,208,80
+6-Month,Test_Temporal,Temporal Test,Random Forest,bacc,Balanced Acc,0.83828125,0.42000000000000004,208,80
+6-Month,Train_Fit,Train Fit,Balanced RF,auc,AUC,0.9376836858180142,0.4700000000000001,795,259
+6-Month,Train_Fit,Train Fit,Balanced RF,recall,Sensitivity,0.9227799227799228,0.4700000000000001,795,259
+6-Month,Train_Fit,Train Fit,Balanced RF,specificity,Specificity,0.8152985074626866,0.4700000000000001,795,259
+6-Month,Train_Fit,Train Fit,Balanced RF,f1,F1,0.8006700167504187,0.4700000000000001,795,259
+6-Month,Train_Fit,Train Fit,Balanced RF,bacc,Balanced Acc,0.8690392151213047,0.4700000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,Balanced RF,auc,AUC,0.9128176684146834,0.4700000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,Balanced RF,recall,Sensitivity,0.8918918918918919,0.4700000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,Balanced RF,specificity,Specificity,0.8152985074626866,0.4700000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,Balanced RF,f1,F1,0.7843803056027164,0.4700000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,Balanced RF,bacc,Balanced Acc,0.8535951996772893,0.4700000000000001,795,259
+6-Month,Test_Temporal,Temporal Test,Balanced RF,auc,AUC,0.9027343750000001,0.4700000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,Balanced RF,recall,Sensitivity,0.875,0.4700000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,Balanced RF,specificity,Specificity,0.78125,0.4700000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,Balanced RF,f1,F1,0.7865168539325843,0.4700000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,Balanced RF,bacc,Balanced Acc,0.828125,0.4700000000000001,208,80
+6-Month,Train_Fit,Train Fit,MLP,auc,AUC,0.9211519621967383,0.4000000000000001,795,259
+6-Month,Train_Fit,Train Fit,MLP,recall,Sensitivity,0.7760617760617761,0.4000000000000001,795,259
+6-Month,Train_Fit,Train Fit,MLP,specificity,Specificity,0.9011194029850746,0.4000000000000001,795,259
+6-Month,Train_Fit,Train Fit,MLP,f1,F1,0.783625730994152,0.4000000000000001,795,259
+6-Month,Train_Fit,Train Fit,MLP,bacc,Balanced Acc,0.8385905895234254,0.4000000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,MLP,auc,AUC,0.8767756295741369,0.4000000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,MLP,recall,Sensitivity,0.722007722007722,0.4000000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,MLP,specificity,Specificity,0.8824626865671642,0.4000000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,MLP,f1,F1,0.7347740667976425,0.4000000000000001,795,259
+6-Month,Validation_OOF,Validation OOF,MLP,bacc,Balanced Acc,0.8022352042874431,0.4000000000000001,795,259
+6-Month,Test_Temporal,Temporal Test,MLP,auc,AUC,0.8818359375,0.4000000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,MLP,recall,Sensitivity,0.7375,0.4000000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,MLP,specificity,Specificity,0.859375,0.4000000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,MLP,f1,F1,0.7515923566878981,0.4000000000000001,208,80
+6-Month,Test_Temporal,Temporal Test,MLP,bacc,Balanced Acc,0.7984375,0.4000000000000001,208,80

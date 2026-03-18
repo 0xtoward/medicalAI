@@ -33,7 +33,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 # import lightgbm as lgb  # Disabled to keep the binary manuscript focused on RF-style interpretable ensembles.
-import shap
 from imblearn.ensemble import BalancedRandomForestClassifier
 # from tabpfn import TabPFNClassifier  # Disabled for the current manuscript version.
 
@@ -49,6 +48,12 @@ from utils.evaluation import (
     save_threshold_sensitivity_figure,
 )
 from utils.model_viz import save_forest_anatomy
+from utils.performance_panels import (
+    build_binary_performance_long,
+    export_metric_matrices,
+    save_performance_heatmap_panels,
+)
+from utils.shap_viz import save_binary_shap_suite
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -171,28 +176,21 @@ def fit_candidate_model(base, grid, n_iter, n_jobs, cv, X_tr_df, y_tr, groups_tr
 # ==========================================
 # 4. Evaluation + plots
 # ==========================================
-def plot_shap_binary(model, X_tr_df, feat_names, title, filename):
+def plot_shap_binary(model_name, model, X_tr_df, X_te_df, feat_names, title, filename):
     print(f"  SHAP: {title}...")
     try:
-        explainer = shap.TreeExplainer(model)
-        sv = explainer.shap_values(X_tr_df)
-        # Binary classifier: SHAP may return list [class0, class1] or 3D array (n_samples, n_features, 2).
-        # Wrong indexing (e.g. sv[1] on 3D) yields (n_features, 2) -> only 2 features display.
-        if isinstance(sv, list):
-            sv = np.asarray(sv[1])
-        elif isinstance(sv, np.ndarray) and sv.ndim == 3:
-            sv = sv[:, :, 1]  # positive class: (n_samples, n_features)
-        sv = np.asarray(sv)
-        n_samples, n_feat = X_tr_df.shape
-        if sv.shape != (n_samples, n_feat):
-            print(f"    SHAP shape mismatch: sv {sv.shape} vs X {n_samples}x{n_feat}, skipping")
-            return
-        X_arr = np.asarray(X_tr_df)
-        plt.figure(figsize=(10, 8))
-        shap.summary_plot(sv, X_arr, feature_names=list(feat_names), max_display=20, show=False)
-        plt.title(title, fontsize=14, pad=20)
-        plt.savefig(Config.OUT_DIR / filename, dpi=300, bbox_inches='tight')
-        plt.close()
+        save_binary_shap_suite(
+            model_name=model_name,
+            model=model,
+            X_background=X_tr_df,
+            X_local=X_te_df,
+            feat_names=feat_names,
+            out_dir=Config.OUT_DIR,
+            summary_filename=filename,
+            summary_title=title,
+            seed=Config.SEED,
+            max_display=20,
+        )
     except Exception as e:
         print(f"    SHAP failed: {e}")
 
@@ -306,6 +304,7 @@ def run_experiment(landmark_name, seq_len):
                 best_f1, best_thr = f, thr
 
         model.fit(X_tr_df, y_tr)
+        train_fit_proba = model.predict_proba(X_tr_df)[:, 1]
         proba = model.predict_proba(X_te_df)[:, 1]
         pred = (proba >= best_thr).astype(int)
 
@@ -319,7 +318,8 @@ def run_experiment(landmark_name, seq_len):
 
         results[name] = dict(proba=proba, auc=auc, prauc=prauc, acc=acc, bacc=bacc,
                              f1=f1, thr=best_thr, tp=tp, fp=fp, fn=fn, tn=tn,
-                             model=model, color=color, ls=ls)
+                             model=model, color=color, ls=ls,
+                             oof_proba=oof, train_fit_proba=train_fit_proba)
 
         star = " *" if auc == max(r['auc'] for r in results.values()) else "  "
         print(f"{star}{name:<18s} {auc:>4.3f} {prauc:>6.3f} {best_thr:>3.2f} {acc:>4.3f} "
@@ -330,6 +330,20 @@ def run_experiment(landmark_name, seq_len):
     best_prauc_name = max(results, key=lambda k: results[k]['prauc'])
     print(f"  Best AUC:    {best_auc_name} ({results[best_auc_name]['auc']:.3f})")
     print(f"  Best PR-AUC: {best_prauc_name} ({results[best_prauc_name]['prauc']:.3f})")
+
+    perf_domains = {
+        "Train_Fit": {"y_true": y_tr, "proba_key": "train_fit_proba"},
+        "Validation_OOF": {"y_true": y_tr, "proba_key": "oof_proba"},
+        "Test_Temporal": {"y_true": y_te, "proba_key": "proba"},
+    }
+    perf_metric_keys = ["auc", "recall", "specificity", "f1", "bacc"]
+    perf_long_df = build_binary_performance_long(
+        task_name=landmark_name,
+        results=results,
+        domain_payloads=perf_domains,
+        metric_keys=perf_metric_keys,
+        threshold_key="thr",
+    )
 
     tag = landmark_name.replace(" ", "_")[:4]
     best_eval_name = best_prauc_name
@@ -429,11 +443,11 @@ def run_experiment(landmark_name, seq_len):
         Config.OUT_DIR / f"Threshold_Sensitivity_{tag}.png",
     )
 
-    # ================= Plot 4: SHAP (best tree model) =================
+    # ================= Plot 4: SHAP suite (best tree model) =================
     tree_ok = {n: r for n, r in results.items() if hasattr(r['model'], 'feature_importances_')}
     if tree_ok:
         bt = max(tree_ok, key=lambda k: tree_ok[k]['auc'])
-        plot_shap_binary(tree_ok[bt]['model'], X_tr_df, feat_names,
+        plot_shap_binary(bt, tree_ok[bt]['model'], X_tr_df, X_te_df, feat_names,
                          title=f"Binary SHAP — {bt} ({landmark_name})",
                          filename=f"SHAP_{tag}.png")
 
@@ -457,11 +471,13 @@ def run_experiment(landmark_name, seq_len):
             sample_y=y_te,
         )
 
+    return perf_long_df
+
 
 # ==========================================
 # 5. Main
 # ==========================================
-if __name__ == "__main__":
+def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--clear-cache', action='store_true', help='Clear cached .pkl files')
@@ -470,6 +486,22 @@ if __name__ == "__main__":
         from utils.data import clear_pkl_cache
         clear_pkl_cache(Config.OUT_DIR)
 
-    run_experiment("3-Month", seq_len=3)
-    run_experiment("6-Month", seq_len=4)
+    perf_frames = [
+        run_experiment("3-Month", seq_len=3),
+        run_experiment("6-Month", seq_len=4),
+    ]
+    perf_long_df = pd.concat(perf_frames, ignore_index=True)
+    export_metric_matrices(perf_long_df, Config.OUT_DIR, prefix="Performance")
+    save_performance_heatmap_panels(
+        perf_long_df,
+        Config.OUT_DIR / "Performance_Heatmaps.png",
+        task_order=["3-Month", "6-Month"],
+        domain_order=["Train_Fit", "Validation_OOF", "Test_Temporal"],
+        metric_order=["auc", "recall", "specificity", "f1", "bacc"],
+        title="Fixed Landmark Internal Performance Heatmaps",
+    )
     print(f"\n  Done. Results in {Config.OUT_DIR.resolve()}")
+
+
+if __name__ == "__main__":
+    main()

@@ -26,7 +26,6 @@ from sklearn.metrics import (roc_auc_score, average_precision_score,
                              f1_score, confusion_matrix, brier_score_loss)
 from sklearn.calibration import calibration_curve
 from sklearn.ensemble import StackingClassifier
-import shap
 import scipy.integrate
 if not hasattr(scipy.integrate, 'trapz'):
     scipy.integrate.trapz = scipy.integrate.trapezoid
@@ -60,6 +59,12 @@ from utils.evaluation import (
 from utils.recurrence import derive_recurrent_survival_data as _derive_recurrent_survival_data
 from utils.recurrence import build_interval_risk_data as _build_interval_risk_data
 from utils.model_viz import save_logistic_regression_visuals
+from utils.performance_panels import (
+    build_binary_performance_long,
+    export_metric_matrices,
+    save_performance_heatmap_panels,
+)
+from utils.shap_viz import save_binary_shap_suite
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -320,49 +325,22 @@ def fit_candidate_model(base, grid, n_iter, n_jobs, cv, X_tr_df, y_tr, groups_tr
     return clone(base), float(np.mean(scores)), None
 
 
-def run_shap_analysis(model_name, model, X_tr_df, feat_names):
-    """Run SHAP on the selected best model with a model-appropriate explainer."""
+def run_shap_analysis(model_name, model, X_tr_df, X_te_df, feat_names):
+    """Save shared SHAP outputs for the selected best model."""
     print(f"\n  SHAP analysis on: {model_name}")
     try:
-        if model_name in {"Logistic Reg.", "Elastic LR"} and isinstance(model, Pipeline):
-            scaler = model.named_steps['scaler']
-            lr = model.named_steps['lr']
-            X_scaled = scaler.transform(X_tr_df)
-            explainer = shap.LinearExplainer(lr, X_scaled)
-            shap_values = explainer.shap_values(X_scaled)
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(
-                shap_values, X_scaled, feature_names=feat_names,
-                max_display=20, show=False
-            )
-        elif hasattr(model, 'feature_importances_'):
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(X_tr_df)
-            if isinstance(shap_values, list):
-                shap_values = shap_values[1]
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(
-                shap_values, X_tr_df, feature_names=feat_names,
-                max_display=20, show=False
-            )
-        else:
-            # Generic fallback for models without native SHAP support.
-            bg = shap.sample(X_tr_df, min(100, len(X_tr_df)), random_state=SEED)
-            eval_x = X_tr_df.iloc[:min(300, len(X_tr_df))]
-            explainer = shap.Explainer(
-                lambda data: model.predict_proba(pd.DataFrame(data, columns=feat_names))[:, 1],
-                bg
-            )
-            shap_values = explainer(eval_x)
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(
-                shap_values, eval_x, feature_names=feat_names,
-                max_display=20, show=False
-            )
-
-        plt.title(f"What Drives Relapse? ({model_name})", fontsize=14, pad=20)
-        plt.savefig(Config.OUT_DIR / "Hazard_SHAP_Relapse.png", dpi=300, bbox_inches='tight')
-        plt.close()
+        save_binary_shap_suite(
+            model_name=model_name,
+            model=model,
+            X_background=X_tr_df,
+            X_local=X_te_df,
+            feat_names=feat_names,
+            out_dir=Config.OUT_DIR,
+            summary_filename="Hazard_SHAP_Relapse.png",
+            summary_title=f"What Drives Relapse? ({model_name})",
+            seed=SEED,
+            max_display=20,
+        )
     except Exception as e:
         print(f"  SHAP failed for {model_name}: {e}")
 
@@ -516,6 +494,7 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
                 best_f1, best_thr = f, thr
 
         model.fit(X_tr_df, y_tr)
+        train_fit_proba = model.predict_proba(X_tr_df)[:, 1]
         proba = model.predict_proba(X_te_df)[:, 1]
         pred_bin = (proba >= best_thr).astype(int)
 
@@ -533,7 +512,8 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
             'c_index': c_index,
             'acc': acc, 'bacc': bacc, 'f1': f1, 'threshold': best_thr,
             'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
-            'model': model, 'color': color, 'ls': ls, 'oof_proba': oof_proba,
+            'model': model, 'color': color, 'ls': ls,
+            'oof_proba': oof_proba, 'train_fit_proba': train_fit_proba,
         }
 
         marker = " *" if auc == max(r['auc'] for r in results.values()) else "  "
@@ -546,6 +526,29 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     print(f"  Best PR-AUC: {best_prauc_name} ({results[best_prauc_name]['prauc']:.3f})")
     best_cidx_name = max(results, key=lambda k: results[k]['c_index'])
     print(f"  Best C-index: {best_cidx_name} ({results[best_cidx_name]['c_index']:.3f})")
+
+    perf_domains = {
+        "Train_Fit": {"y_true": y_tr, "proba_key": "train_fit_proba"},
+        "Validation_OOF": {"y_true": y_tr, "proba_key": "oof_proba"},
+        "Test_Temporal": {"y_true": y_te, "proba_key": "proba"},
+    }
+    perf_metric_keys = ["prauc", "auc", "recall", "specificity", "f1"]
+    perf_long_df = build_binary_performance_long(
+        task_name="Rolling Landmark",
+        results=results,
+        domain_payloads=perf_domains,
+        metric_keys=perf_metric_keys,
+        threshold_key="threshold",
+    )
+    export_metric_matrices(perf_long_df, Config.OUT_DIR, prefix="Performance")
+    save_performance_heatmap_panels(
+        perf_long_df,
+        Config.OUT_DIR / "Performance_Heatmaps.png",
+        task_order=["Rolling Landmark"],
+        domain_order=["Train_Fit", "Validation_OOF", "Test_Temporal"],
+        metric_order=perf_metric_keys,
+        title="Rolling Landmark Internal Performance Heatmaps",
+    )
 
     # ================= 评估增强: interval-level CI / calibration / DCA =================
     best_eval_name = best_prauc_name
@@ -720,7 +723,7 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
               f"AUC={row['AUC']:.3f}  PR-AUC={row['PR_AUC']:.3f}  Brier={row['Brier']:.3f}")
     window_sens_df.to_csv(Config.OUT_DIR / "Window_Sensitivity.csv", index=False)
 
-    # ================= 绘图 3: SHAP (优先解释 PR-AUC 最优模型) =================
+    # ================= 绘图 3: SHAP suite (优先解释 PR-AUC 最优模型) =================
     best_shap_name = best_prauc_name
     best_shap_model = results[best_shap_name]['model']
     save_lr_artifacts(
@@ -729,7 +732,7 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
         feat_names,
         decision_threshold=results['Logistic Reg.']['threshold'],
     )
-    run_shap_analysis(best_shap_name, best_shap_model, X_tr_df, feat_names)
+    run_shap_analysis(best_shap_name, best_shap_model, X_tr_df, X_te_df, feat_names)
 
 def main():
     import argparse

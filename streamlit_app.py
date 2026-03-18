@@ -52,19 +52,38 @@ def _inject_styles() -> None:
         html, body, [class*="css"]  {
             font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
         }
+        body[data-theme="dark"],
+        html[data-theme="dark"],
+        [data-theme="dark"],
         [data-base-theme="dark"] {
             --app-bg:
-                radial-gradient(circle at top left, rgba(191, 128, 64, 0.16), transparent 28%),
-                radial-gradient(circle at top right, rgba(77, 134, 110, 0.18), transparent 28%),
-                linear-gradient(180deg, #0f1715 0%, #16211f 100%);
-            --card-bg: rgba(18, 28, 26, 0.82);
-            --card-border: rgba(214, 199, 171, 0.14);
-            --card-shadow: rgba(0, 0, 0, 0.28);
-            --note-bg: rgba(22, 34, 31, 0.9);
-            --note-accent: #d49a60;
-            --muted-text: #c5b8a8;
-            --title-text: #f3eee6;
-            --body-text: #dfd4c7;
+                radial-gradient(circle at top left, rgba(225, 139, 58, 0.20), transparent 26%),
+                radial-gradient(circle at top right, rgba(53, 130, 109, 0.22), transparent 28%),
+                linear-gradient(180deg, #08110f 0%, #10201c 55%, #142723 100%);
+            --card-bg: rgba(20, 32, 29, 0.94);
+            --card-border: rgba(115, 199, 171, 0.22);
+            --card-shadow: rgba(0, 0, 0, 0.42);
+            --note-bg: rgba(15, 27, 24, 0.96);
+            --note-accent: #f0a75d;
+            --muted-text: #bfd4cc;
+            --title-text: #f8fbfa;
+            --body-text: #e7f1ed;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --app-bg:
+                    radial-gradient(circle at top left, rgba(225, 139, 58, 0.20), transparent 26%),
+                    radial-gradient(circle at top right, rgba(53, 130, 109, 0.22), transparent 28%),
+                    linear-gradient(180deg, #08110f 0%, #10201c 55%, #142723 100%);
+                --card-bg: rgba(20, 32, 29, 0.94);
+                --card-border: rgba(115, 199, 171, 0.22);
+                --card-shadow: rgba(0, 0, 0, 0.42);
+                --note-bg: rgba(15, 27, 24, 0.96);
+                --note-accent: #f0a75d;
+                --muted-text: #bfd4cc;
+                --title-text: #f8fbfa;
+                --body-text: #e7f1ed;
+            }
         }
         .stApp {
             background: var(--app-bg);
@@ -79,7 +98,7 @@ def _inject_styles() -> None:
             background: var(--card-bg);
             border: 1px solid var(--card-border);
             box-shadow: 0 10px 35px var(--card-shadow);
-            backdrop-filter: blur(6px);
+            backdrop-filter: blur(10px);
         }
         .note-card {
             padding: 0.9rem 1rem;
@@ -87,6 +106,20 @@ def _inject_styles() -> None:
             background: var(--note-bg);
             border-radius: 10px;
             color: var(--body-text);
+        }
+        body[data-theme="dark"] .metric-card,
+        [data-theme="dark"] .metric-card,
+        [data-base-theme="dark"] .metric-card {
+            background: rgba(18, 31, 28, 0.96);
+            border-color: rgba(118, 201, 174, 0.26);
+            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.46);
+        }
+        body[data-theme="dark"] .note-card,
+        [data-theme="dark"] .note-card,
+        [data-base-theme="dark"] .note-card {
+            background: rgba(13, 24, 21, 0.98);
+            border-left-color: #f0a75d;
+            color: #eef7f3;
         }
         .metric-label {
             font-size: 0.88rem;
@@ -99,6 +132,7 @@ def _inject_styles() -> None:
             font-weight: 600;
             color: var(--title-text);
             margin: 0.1rem 0 0.35rem 0;
+            line-height: 1.1;
         }
         .metric-caption {
             font-size: 0.92rem;
