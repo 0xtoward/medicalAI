@@ -46,6 +46,26 @@
 
 这意味着当前 README 所有主结果都来自**顺序切分 + 患者级隔离**，而不是随机切分。
 
+### 基线特征表
+为了让队列构成和训练/测试切分更直观，仓库现在补充了一张论文风格的基线特征表：
+
+![基线特征表](results/cohort_summary/Baseline_Characteristics_Table.png)
+文件名：`results/cohort_summary/Baseline_Characteristics_Table.png`
+
+配套原始表格文件：
+`results/cohort_summary/Baseline_Characteristics_Table.csv`
+
+这张表同时给了两层信息：
+
+- 按原始三状态结局分组：`Hyper / Normal / Hypo`
+- 按真实开发流程分组：`Training / Test`
+
+其中，结局分组的 `P-value¹` 比较的是三状态之间的差异，切分分组的 `P-value²` 比较的是训练集与测试集之间的差异。它的意义主要有三点：
+
+- 先交代数据本身的临床异质性，而不是一上来只报模型分数。
+- 让读者看到时间顺序切分后，训练集和测试集并不是完全随机同分布。
+- 为后面 fixed landmark、rolling landmark 与 recurrent-event 的任务定义提供同一个共同起点。
+
 ### 防泄漏原则
 
 1. 先切分，再做任何预处理。
