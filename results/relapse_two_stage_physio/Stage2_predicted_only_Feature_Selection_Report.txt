@@ -1,0 +1,5 @@
+original_features=3
+selected_features=3
+best_c=10.0
+cv_pr_auc=0.278675
+selected_feature_names=Pred_FT3_Next, Pred_FT4_Next, Pred_logTSH_Next

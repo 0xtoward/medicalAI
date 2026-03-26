@@ -1,0 +1,5 @@
+original_features=34
+selected_features=19
+best_c=0.05
+cv_pr_auc=0.289231
+selected_feature_names=Height, Exophthalmos, ThyroidW, TGAb, TPOAb, MaxUptake, FT3_Current, FT4_Current, Ever_Hyper_Before, Ever_Hypo_Before, Time_In_Normal, Delta_FT4_k0, Delta_TSH_k0, Delta_FT4_1step, Window_12M->18M, Window_18M->24M, Window_1M->3M, Window_6M->12M, PrevState_2

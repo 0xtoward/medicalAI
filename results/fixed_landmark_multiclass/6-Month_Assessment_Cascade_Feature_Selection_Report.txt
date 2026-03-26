@@ -1,0 +1,5 @@
+original_features=37
+selected_features=13
+best_c=0.1
+cv_pr_auc=0.834283
+selected_feature_names=Age, Height, Exophthalmos, ThyroidW, Uptake24h, FT4_1M, FT3_3M, FT4_3M, TSH_3M, FT3_6M, FT4_6M, D_TSH_3M-0M, D_TSH_6M-0M
