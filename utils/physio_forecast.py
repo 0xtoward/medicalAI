@@ -281,43 +281,131 @@ def get_stage2_models():
 def save_physio_scatter(y_true, y_pred, out_dir, model_name, split_name):
     """Save true-vs-pred scatter plots for the best stage-1 model."""
     out_dir = Path(out_dir)
-    fig, axes = plt.subplots(1, 3, figsize=(14.6, 4.4))
+    fig = plt.figure(figsize=(15.2, 5.0))
+    outer = fig.add_gridspec(1, 3, wspace=0.26)
+    actual_color = "#f59e0b"
+    predicted_color = PRIMARY_BLUE
+    ref_color = "#64748b"
     for idx, target in enumerate(TARGET_COLS):
-        ax = axes[idx]
+        inner = outer[0, idx].subgridspec(
+            2,
+            2,
+            height_ratios=[0.9, 4.0],
+            width_ratios=[4.0, 0.9],
+            hspace=0.0,
+            wspace=0.0,
+        )
+        ax_top = fig.add_subplot(inner[0, 0])
+        ax = fig.add_subplot(inner[1, 0], sharex=ax_top)
+        ax_right = fig.add_subplot(inner[1, 1], sharey=ax)
+        ax_corner = fig.add_subplot(inner[0, 1])
+        ax_corner.axis("off")
+
         mae = mean_absolute_error(y_true[:, idx], y_pred[:, idx])
         rmse = float(np.sqrt(mean_squared_error(y_true[:, idx], y_pred[:, idx])))
         r2 = r2_score(y_true[:, idx], y_pred[:, idx])
         corr_r, corr_p = pearsonr(y_true[:, idx], y_pred[:, idx])
-        ax.scatter(
-            y_true[:, idx],
-            y_pred[:, idx],
-            alpha=0.50,
+        actual = y_true[:, idx]
+        predicted = y_pred[:, idx]
+
+        actual_handle = ax.scatter(
+            actual,
+            actual,
+            alpha=0.32,
             s=22,
-            color=PRIMARY_BLUE,
+            facecolors="none",
+            edgecolors=actual_color,
+            linewidths=0.9,
+            label="Actual",
+            zorder=2,
+        )
+        predicted_handle = ax.scatter(
+            actual,
+            predicted,
+            alpha=0.62,
+            s=22,
+            color=predicted_color,
             edgecolors="white",
             linewidths=0.25,
-            label="Samples",
-            zorder=3,
+            label="Predicted",
+            zorder=4,
         )
-        low = float(min(y_true[:, idx].min(), y_pred[:, idx].min()))
-        high = float(max(y_true[:, idx].max(), y_pred[:, idx].max()))
+        low = float(min(actual.min(), predicted.min()))
+        high = float(max(actual.max(), predicted.max()))
         pad = 0.03 * (high - low if high > low else 1.0)
         line = ax.plot(
             [low - pad, high + pad],
             [low - pad, high + pad],
             "--",
-            color=PRIMARY_TEAL,
-            lw=1.5,
-            label="Identity line",
-            zorder=2,
+            color=ref_color,
+            lw=1.2,
+            label="Ideal agreement",
+            zorder=1,
         )[0]
         ax.set_xlim(low - pad, high + pad)
         ax.set_ylim(low - pad, high + pad)
-        ax.set_title(target, fontsize=9, pad=6)
         ax.set_xlabel("Actual", fontsize=7)
         ax.set_ylabel("Predicted", fontsize=7)
         ax.grid(alpha=0.22)
-        ax.legend(handles=[ax.collections[0], line], loc="lower right", frameon=False, fontsize=6.5)
+        legend = ax.legend(
+            handles=[actual_handle, predicted_handle, line],
+            loc="upper left",
+            frameon=False,
+            fontsize=6.3,
+        )
+        ax_top.hist(
+            actual,
+            bins=18,
+            range=(low - pad, high + pad),
+            color=actual_color,
+            alpha=0.28,
+            edgecolor=actual_color,
+            linewidth=0.8,
+        )
+        ax_top.hist(
+            predicted,
+            bins=18,
+            range=(low - pad, high + pad),
+            color=predicted_color,
+            alpha=0.20,
+            edgecolor=predicted_color,
+            linewidth=0.8,
+        )
+        ax_right.hist(
+            actual,
+            bins=18,
+            range=(low - pad, high + pad),
+            orientation="horizontal",
+            color=actual_color,
+            alpha=0.28,
+            edgecolor=actual_color,
+            linewidth=0.8,
+        )
+        ax_right.hist(
+            predicted,
+            bins=18,
+            range=(low - pad, high + pad),
+            orientation="horizontal",
+            color=predicted_color,
+            alpha=0.20,
+            edgecolor=predicted_color,
+            linewidth=0.8,
+        )
+        ax_top.set_title(target, fontsize=9, pad=4)
+        for marginal_ax in (ax_top, ax_right):
+            marginal_ax.grid(False)
+            marginal_ax.set_facecolor("white")
+        ax_top.tick_params(axis="x", labelbottom=False, bottom=False)
+        ax_top.tick_params(axis="y", labelleft=False, left=False)
+        ax_right.tick_params(axis="x", labelbottom=False, bottom=False)
+        ax_right.tick_params(axis="y", labelleft=False, left=False)
+        ax_top.spines["right"].set_visible(False)
+        ax_top.spines["top"].set_visible(False)
+        ax_top.spines["left"].set_visible(False)
+        ax_right.spines["right"].set_visible(False)
+        ax_right.spines["top"].set_visible(False)
+        ax_right.spines["bottom"].set_visible(False)
+
         metric_text = "\n".join(
             [
                 f"MAE = {mae:.3f}",
@@ -327,9 +415,14 @@ def save_physio_scatter(y_true, y_pred, out_dir, model_name, split_name):
                 _format_p_value(corr_p),
             ]
         )
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend_bbox = legend.get_window_extent(renderer=renderer).transformed(ax.transAxes.inverted())
+        metric_x = max(0.04, float(legend_bbox.x0) + 0.01)
+        metric_y = max(0.12, float(legend_bbox.y0) - 0.03)
         ax.text(
-            0.04,
-            0.96,
+            metric_x,
+            metric_y,
             metric_text,
             transform=ax.transAxes,
             ha="left",
@@ -337,10 +430,10 @@ def save_physio_scatter(y_true, y_pred, out_dir, model_name, split_name):
             fontsize=6.5,
             color=TEXT_DARK,
             bbox=dict(boxstyle="round,pad=0.28", facecolor="white", edgecolor=SOFT_BLUE, alpha=0.92),
-            zorder=4,
+            zorder=5,
         )
     fig.suptitle(f"{model_name}: actual vs predicted physiology ({split_name})", fontsize=10, y=0.98)
-    fig.subplots_adjust(left=0.06, right=0.985, top=0.84, bottom=0.16, wspace=0.28)
+    fig.subplots_adjust(left=0.05, right=0.985, top=0.84, bottom=0.12)
     fig.savefig(out_dir / f"{model_name.replace(' ', '_')}_{split_name}_Scatter.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 

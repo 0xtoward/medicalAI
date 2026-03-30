@@ -304,8 +304,8 @@ def save_stage2_comparison(two_stage_df, best_groups, test_df):
         y_true, direct_proba, best_groups["predicted_plus_current"][1]["proba"], groups
     )
     y_base = float(best_df["PR_AUC"].max()) + 0.045
-    _draw_sig_bracket(axes[1], 0, 1, y_base, f"Direct > Pred only, {_format_p_value(p_direct_vs_pred_only)}")
-    _draw_sig_bracket(axes[1], 0, 2, y_base + 0.05, f"Direct > Pred + current, {_format_p_value(p_direct_vs_pred_plus)}")
+    _draw_sig_bracket(axes[1], 0, 1, y_base, _format_p_value(p_direct_vs_pred_only))
+    _draw_sig_bracket(axes[1], 0, 2, y_base + 0.05, _format_p_value(p_direct_vs_pred_plus))
 
     fig.tight_layout(rect=[0, 0.02, 1, 0.98])
     fig.savefig(Config.OUT_DIR / "TwoStage_Group_Comparison.png", dpi=300, bbox_inches="tight")
