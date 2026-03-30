@@ -15,6 +15,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import _tree, plot_tree
 
 from utils.config import STATIC_NAMES
+from utils.plot_style import (
+    ACCENT_CYAN,
+    HEATMAP_CMAP,
+    PRIMARY_BLUE,
+    PRIMARY_TEAL,
+    SOFT_BLUE,
+    SOFT_TEAL,
+)
 
 
 # ── shared drawing primitives ────────────────────────────────────────────────
@@ -46,11 +54,11 @@ LR_FAMILY_ORDER = [
 ]
 
 LR_FAMILY_COLORS = {
-    "Current physiology": "#d97706",
-    "State memory": "#0f766e",
+    "Current physiology": "#0f766e",
+    "State memory": "#1d4ed8",
     "Trajectory": "#7c3aed",
-    "Follow-up window": "#2563eb",
-    "Previous state": "#dc2626",
+    "Follow-up window": "#0284c7",
+    "Previous state": "#f59e0b",
     "Baseline clinic": "#64748b",
     "Other": "#475569",
 }
@@ -246,7 +254,7 @@ def _save_lr_model_structure(model_name, lr, coef_df, intercept, out_path, decis
     ] or ["no negative coefficients retained"]
     _draw_text_card(
         ax, 0.52, 0.20, 0.20, 0.24, "Largest risk-up weights", risk_lines,
-        fc="#fff1f2", ec="#dc2626",
+        fc="#f0fdfa", ec=PRIMARY_TEAL,
     )
     _draw_text_card(
         ax, 0.75, 0.20, 0.20, 0.24, "Largest protective weights", protect_lines,
@@ -457,8 +465,8 @@ def _save_lr_coefficient_flow(model_name, coef_df, intercept, out_path, top_n=8,
             ax.set_axis_off()
             return
         y_pos = np.arange(n)
-        colors = ["#fda4af" if is_positive else "#93c5fd"] * n
-        edges = [LR_FAMILY_COLORS.get(row.family, "#dc2626" if is_positive else "#2563eb") for row in data.itertuples(index=False)]
+        colors = [SOFT_TEAL if is_positive else SOFT_BLUE] * n
+        edges = [LR_FAMILY_COLORS.get(row.family, PRIMARY_TEAL if is_positive else PRIMARY_BLUE) for row in data.itertuples(index=False)]
         coefs = data["coef"].values
         ax.barh(y_pos, coefs, color=colors, edgecolor=edges, linewidth=1.8, height=0.7, zorder=2)
         ax.axvline(0.0, color="#0f172a", lw=1.2, zorder=1)
@@ -496,8 +504,8 @@ def _save_lr_coefficient_flow(model_name, coef_df, intercept, out_path, top_n=8,
     fig.text(0.5, 0.01, "  |  ".join(info_lines), ha="center", va="bottom", fontsize=9.5, color="#64748b")
 
     legend_items = [
-        Line2D([0], [0], color="#93c5fd", lw=8, label="Negative beta"),
-        Line2D([0], [0], color="#fda4af", lw=8, label="Positive beta"),
+        Line2D([0], [0], color=SOFT_BLUE, lw=8, label="Negative beta"),
+        Line2D([0], [0], color=SOFT_TEAL, lw=8, label="Positive beta"),
     ]
     for family in LR_FAMILY_ORDER:
         if family in active_df["family"].values:
@@ -573,7 +581,7 @@ def save_tree_importance_flow(
         return
     n = len(top)
 
-    cmap = plt.cm.YlOrRd
+    cmap = plt.get_cmap(HEATMAP_CMAP)
     norm = mcolors.Normalize(vmin=0, vmax=top["importance"].max())
 
     fig_h = max(5.5, 0.55 * n + 2.2)
@@ -624,9 +632,9 @@ def save_tree_importance_flow(
                                     alpha=0.45 + 0.55 * pct))
 
     _rounded_box(ax, model_x, n/2 - 0.65, 2.2, 1.3, model_type, _model_detail(model),
-                 fc="#eef3fb", ec="#4c78a8")
+                 fc="#eef6ff", ec=PRIMARY_BLUE)
     _rounded_box(ax, out_x, n/2 - 0.45, 1.7, 0.9, output_label, "",
-                 fc="#fff3e6", ec="#e6550d")
+                 fc="#ecfeff", ec=ACCENT_CYAN)
 
     ax.annotate("", xy=(out_x, n/2), xytext=(model_x + 2.2, n/2),
                 arrowprops=dict(arrowstyle="->", lw=1.8, color="#333"))

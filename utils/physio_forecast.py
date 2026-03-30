@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import pearsonr
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import ElasticNet, LogisticRegression, Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -15,8 +16,15 @@ from sklearn.preprocessing import StandardScaler
 
 from utils.config import SEED, STATIC_NAMES, TIME_STAMPS
 from utils.data import apply_missforest, fit_missforest, load_or_fit_depth_imputer, split_imputed
+from utils.plot_style import PRIMARY_BLUE, PRIMARY_TEAL, SOFT_BLUE, TEXT_DARK, TEXT_MID
 
 TARGET_COLS = ["FT3_Next", "FT4_Next", "logTSH_Next"]
+
+
+def _format_p_value(p_value):
+    if p_value < 1e-3:
+        return "p < 0.001"
+    return f"p = {p_value:.3f}"
 
 
 def build_next_physio_targets(X_d_next, S_matrix, pids, target_k=None, row_ids=None):
@@ -273,19 +281,66 @@ def get_stage2_models():
 def save_physio_scatter(y_true, y_pred, out_dir, model_name, split_name):
     """Save true-vs-pred scatter plots for the best stage-1 model."""
     out_dir = Path(out_dir)
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    fig, axes = plt.subplots(1, 3, figsize=(14.6, 4.4))
     for idx, target in enumerate(TARGET_COLS):
         ax = axes[idx]
-        ax.scatter(y_true[:, idx], y_pred[:, idx], alpha=0.35, s=14)
+        mae = mean_absolute_error(y_true[:, idx], y_pred[:, idx])
+        rmse = float(np.sqrt(mean_squared_error(y_true[:, idx], y_pred[:, idx])))
+        r2 = r2_score(y_true[:, idx], y_pred[:, idx])
+        corr_r, corr_p = pearsonr(y_true[:, idx], y_pred[:, idx])
+        ax.scatter(
+            y_true[:, idx],
+            y_pred[:, idx],
+            alpha=0.50,
+            s=22,
+            color=PRIMARY_BLUE,
+            edgecolors="white",
+            linewidths=0.25,
+            label="Samples",
+            zorder=3,
+        )
         low = float(min(y_true[:, idx].min(), y_pred[:, idx].min()))
         high = float(max(y_true[:, idx].max(), y_pred[:, idx].max()))
-        ax.plot([low, high], [low, high], "--", color="gray", lw=1.2)
-        ax.set_title(target)
-        ax.set_xlabel("True")
-        ax.set_ylabel("Predicted")
-        ax.grid(alpha=0.25)
-    fig.suptitle(f"{model_name}: true vs predicted physiology ({split_name})", fontsize=13)
-    fig.tight_layout()
+        pad = 0.03 * (high - low if high > low else 1.0)
+        line = ax.plot(
+            [low - pad, high + pad],
+            [low - pad, high + pad],
+            "--",
+            color=PRIMARY_TEAL,
+            lw=1.5,
+            label="Identity line",
+            zorder=2,
+        )[0]
+        ax.set_xlim(low - pad, high + pad)
+        ax.set_ylim(low - pad, high + pad)
+        ax.set_title(target, fontsize=9, pad=6)
+        ax.set_xlabel("Actual", fontsize=7)
+        ax.set_ylabel("Predicted", fontsize=7)
+        ax.grid(alpha=0.22)
+        ax.legend(handles=[ax.collections[0], line], loc="lower right", frameon=False, fontsize=6.5)
+        metric_text = "\n".join(
+            [
+                f"MAE = {mae:.3f}",
+                f"RMSE = {rmse:.3f}",
+                f"R$^2$ = {r2:.3f}",
+                f"r = {corr_r:.3f}",
+                _format_p_value(corr_p),
+            ]
+        )
+        ax.text(
+            0.04,
+            0.96,
+            metric_text,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=6.5,
+            color=TEXT_DARK,
+            bbox=dict(boxstyle="round,pad=0.28", facecolor="white", edgecolor=SOFT_BLUE, alpha=0.92),
+            zorder=4,
+        )
+    fig.suptitle(f"{model_name}: actual vs predicted physiology ({split_name})", fontsize=10, y=0.98)
+    fig.subplots_adjust(left=0.06, right=0.985, top=0.84, bottom=0.16, wspace=0.28)
     fig.savefig(out_dir / f"{model_name.replace(' ', '_')}_{split_name}_Scatter.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -295,14 +350,28 @@ def save_stage1_metric_bar(metrics_df, out_dir):
     out_dir = Path(out_dir)
     avg_df = metrics_df[metrics_df["Target"] == "Average"].copy()
     fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.2))
-    axes[0].bar(avg_df["Model"], avg_df["RMSE"], color="steelblue")
-    axes[0].set_title("Average RMSE by stage-1 model")
-    axes[0].tick_params(axis="x", rotation=20)
+    rmse_bars = axes[0].bar(avg_df["Model"], avg_df["RMSE"], color=PRIMARY_BLUE, alpha=0.88)
+    axes[0].set_title("Average RMSE by stage-1 model", fontsize=9)
+    axes[0].tick_params(axis="x", rotation=18, labelsize=7)
     axes[0].grid(axis="y", alpha=0.25)
-    axes[1].bar(avg_df["Model"], avg_df["R2"], color="coral")
-    axes[1].set_title("Average R2 by stage-1 model")
-    axes[1].tick_params(axis="x", rotation=20)
+    r2_bars = axes[1].bar(avg_df["Model"], avg_df["R2"], color=PRIMARY_TEAL, alpha=0.88)
+    axes[1].set_title("Average R$^2$ by stage-1 model", fontsize=9)
+    axes[1].tick_params(axis="x", rotation=18, labelsize=7)
     axes[1].grid(axis="y", alpha=0.25)
+    axes[0].set_ylim(0, float(avg_df["RMSE"].max()) * 1.12)
+    axes[1].set_ylim(0, max(0.08, float(avg_df["R2"].max()) * 1.30))
+    for bars, ax in [(rmse_bars, axes[0]), (r2_bars, axes[1])]:
+        y_offset = 0.02 * ax.get_ylim()[1]
+        for bar in bars:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + y_offset,
+                f"{bar.get_height():.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=6.5,
+                color=TEXT_MID,
+            )
     fig.tight_layout()
     fig.savefig(out_dir / "Stage1_Forecast_Bar.png", dpi=300, bbox_inches="tight")
     plt.close(fig)

@@ -64,9 +64,10 @@ from utils.performance_panels import (
     export_metric_matrices,
     save_performance_heatmap_panels,
 )
+from utils.plot_style import PRIMARY_BLUE, PRIMARY_TEAL, apply_publication_style
 from utils.shap_viz import save_binary_shap_suite
 
-plt.rcParams["font.family"] = "DejaVu Sans"
+apply_publication_style()
 
 # ==========================================
 # 1. 基础配置
@@ -620,9 +621,9 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
     fig, ax = plt.subplots(figsize=(10, 5))
     x = np.arange(len(names))
     w = 0.26
-    bars1 = ax.bar(x - w, aucs, w, label='ROC-AUC', color='steelblue')
-    bars2 = ax.bar(x, praucs, w, label='PR-AUC', color='coral')
-    bars3 = ax.bar(x + w, cidxs, w, label='C-index', color='seagreen')
+    bars1 = ax.bar(x - w, aucs, w, label='ROC-AUC', color=PRIMARY_BLUE)
+    bars2 = ax.bar(x, praucs, w, label='PR-AUC', color=PRIMARY_TEAL)
+    bars3 = ax.bar(x + w, cidxs, w, label='C-index', color='#38bdf8')
 
     for b in bars1:
         ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.008,

@@ -29,6 +29,13 @@ from utils.evaluation import (
     select_best_threshold,
 )
 from utils.model_viz import save_logistic_regression_visuals
+from utils.plot_style import (
+    PRIMARY_BLUE,
+    PRIMARY_TEAL,
+    TEXT_DARK,
+    TEXT_MID,
+    apply_publication_style,
+)
 from utils.physio_forecast import (
     TARGET_COLS,
     add_predicted_physio_columns,
@@ -42,11 +49,12 @@ from utils.physio_forecast import (
     save_stage1_metric_bar,
 )
 from utils.recurrence import build_interval_risk_data
+from sklearn.metrics import average_precision_score
 
 os.environ["PYTHONWARNINGS"] = "ignore"
 warnings.filterwarnings("ignore")
 
-plt.rcParams["font.family"] = "DejaVu Sans"
+apply_publication_style()
 np.random.seed(SEED)
 
 
@@ -211,16 +219,95 @@ def fit_stage2_group(mode, train_df, test_df):
     return pd.DataFrame(rows), best_name, best_payload
 
 
-def save_stage2_comparison(two_stage_df):
-    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.5))
-    best_df = two_stage_df.sort_values(["Group", "PR_AUC"], ascending=[True, False]).groupby("Group", as_index=False).first()
-    axes[0].bar(best_df["Group"], best_df["AUC"], color="steelblue")
-    axes[0].set_title("Best AUC by group")
+def _format_p_value(p_value):
+    if p_value < 1e-3:
+        return "p < 0.001"
+    return f"p = {p_value:.3f}"
+
+
+def _group_bootstrap_pr_auc_pvalue(y_true, proba_a, proba_b, groups, n_boot=2000, seed=SEED):
+    """One-sided grouped bootstrap test for PR-AUC(a) > PR-AUC(b)."""
+    unique_groups = pd.Index(groups).drop_duplicates().to_list()
+    group_to_idx = {group: np.flatnonzero(groups == group) for group in unique_groups}
+    rng = np.random.default_rng(seed)
+    diffs = []
+    for _ in range(n_boot):
+        sampled = rng.choice(unique_groups, size=len(unique_groups), replace=True)
+        boot_idx = np.concatenate([group_to_idx[group] for group in sampled])
+        y_boot = y_true[boot_idx]
+        if np.unique(y_boot).size < 2:
+            continue
+        diff = average_precision_score(y_boot, proba_a[boot_idx]) - average_precision_score(y_boot, proba_b[boot_idx])
+        diffs.append(diff)
+    if not diffs:
+        return np.nan
+    diffs = np.asarray(diffs, dtype=float)
+    return (np.sum(diffs <= 0) + 1) / (len(diffs) + 1)
+
+
+def _annotate_bars(ax, bars):
+    for bar in bars:
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.012,
+            f"{bar.get_height():.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=6.5,
+            color=TEXT_MID,
+        )
+
+
+def _draw_sig_bracket(ax, x1, x2, y, text, color=TEXT_DARK):
+    ax.plot([x1, x1, x2, x2], [y - 0.004, y, y, y - 0.004], lw=1.0, color=color, clip_on=False)
+    ax.text((x1 + x2) / 2, y + 0.004, text, ha="center", va="bottom", fontsize=6.5, color=color)
+
+
+def save_stage2_comparison(two_stage_df, best_groups, test_df):
+    label_map = {
+        "direct": "Direct",
+        "predicted_only": "Pred only",
+        "predicted_plus_current": "Pred + current",
+    }
+    best_df = (
+        two_stage_df.sort_values(["Group", "PR_AUC"], ascending=[True, False])
+        .groupby("Group", as_index=False)
+        .first()
+    )
+    best_df["Group_Label"] = best_df["Group"].map(label_map)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.8, 4.6))
+    auc_bars = axes[0].bar(best_df["Group_Label"], best_df["AUC"], color=PRIMARY_BLUE, alpha=0.88, width=0.62)
+    pr_bars = axes[1].bar(best_df["Group_Label"], best_df["PR_AUC"], color=PRIMARY_TEAL, alpha=0.88, width=0.62)
+
+    axes[0].set_title("Best AUC by group", fontsize=9)
+    axes[0].set_ylim(0, max(0.9, float(best_df["AUC"].max()) + 0.08))
     axes[0].grid(axis="y", alpha=0.25)
-    axes[1].bar(best_df["Group"], best_df["PR_AUC"], color="coral")
-    axes[1].set_title("Best PR-AUC by group")
+    axes[1].set_title("Best PR-AUC by group", fontsize=9)
+    axes[1].set_ylim(0, max(0.40, float(best_df["PR_AUC"].max()) + 0.10))
     axes[1].grid(axis="y", alpha=0.25)
-    fig.tight_layout()
+    for ax in axes:
+        ax.tick_params(axis="x", labelsize=7)
+        ax.tick_params(axis="y", labelsize=7)
+        ax.set_xlabel("")
+
+    _annotate_bars(axes[0], auc_bars)
+    _annotate_bars(axes[1], pr_bars)
+
+    y_true = test_df["Y_Relapse"].values.astype(int)
+    groups = test_df["Patient_ID"].values
+    direct_proba = best_groups["direct"][1]["proba"]
+    p_direct_vs_pred_only = _group_bootstrap_pr_auc_pvalue(
+        y_true, direct_proba, best_groups["predicted_only"][1]["proba"], groups
+    )
+    p_direct_vs_pred_plus = _group_bootstrap_pr_auc_pvalue(
+        y_true, direct_proba, best_groups["predicted_plus_current"][1]["proba"], groups
+    )
+    y_base = float(best_df["PR_AUC"].max()) + 0.045
+    _draw_sig_bracket(axes[1], 0, 1, y_base, f"Direct > Pred only, {_format_p_value(p_direct_vs_pred_only)}")
+    _draw_sig_bracket(axes[1], 0, 2, y_base + 0.05, f"Direct > Pred + current, {_format_p_value(p_direct_vs_pred_plus)}")
+
+    fig.tight_layout(rect=[0, 0.02, 1, 0.98])
     fig.savefig(Config.OUT_DIR / "TwoStage_Group_Comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -272,7 +359,7 @@ def main():
 
     two_stage_df = pd.concat(all_rows, ignore_index=True)
     two_stage_df.to_csv(Config.OUT_DIR / "TwoStage_Model_Comparison.csv", index=False)
-    save_stage2_comparison(two_stage_df)
+    save_stage2_comparison(two_stage_df, best_groups, df_test_pred)
 
     best_mode = max(best_groups, key=lambda g: best_groups[g][1]["metrics"]["prauc"])
     best_name, best_payload = best_groups[best_mode]

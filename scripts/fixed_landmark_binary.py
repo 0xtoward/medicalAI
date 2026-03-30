@@ -53,9 +53,10 @@ from utils.performance_panels import (
     export_metric_matrices,
     save_performance_heatmap_panels,
 )
+from utils.plot_style import PRIMARY_BLUE, PRIMARY_TEAL, apply_publication_style
 from utils.shap_viz import save_binary_shap_suite
 
-plt.rcParams["font.family"] = "DejaVu Sans"
+apply_publication_style()
 
 
 # ==========================================
@@ -391,8 +392,8 @@ def run_experiment(landmark_name, seq_len):
     fig, ax = plt.subplots(figsize=(10, 5))
     x = np.arange(len(names))
     w = 0.35
-    b1 = ax.bar(x - w/2, aucs, w, label='ROC-AUC', color='steelblue')
-    b2 = ax.bar(x + w/2, praucs, w, label='PR-AUC', color='coral')
+    b1 = ax.bar(x - w/2, aucs, w, label='ROC-AUC', color=PRIMARY_BLUE)
+    b2 = ax.bar(x + w/2, praucs, w, label='PR-AUC', color=PRIMARY_TEAL)
     for b in b1:
         ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.005,
                 f"{b.get_height():.3f}", ha='center', fontsize=7.5)

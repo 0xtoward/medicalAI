@@ -9,6 +9,7 @@ import pandas as pd
 import seaborn as sns
 
 from utils.evaluation import compute_binary_metrics
+from utils.plot_style import HEATMAP_CMAP, TEXT_DARK
 
 
 DOMAIN_LABELS = {
@@ -99,7 +100,7 @@ def save_performance_heatmap_panels(
     domain_order,
     metric_order,
     title,
-    cmap="YlOrRd",
+    cmap=HEATMAP_CMAP,
 ):
     """Save panel heatmaps for one or more tasks across performance domains."""
     if len(task_order) == 0 or len(domain_order) == 0:
@@ -107,12 +108,18 @@ def save_performance_heatmap_panels(
 
     nrows = len(task_order)
     ncols = len(domain_order)
-    fig_w = max(14, 4.4 * ncols)
-    fig_h = max(4.6, 2.8 * nrows + 1.6)
+    max_models = int(long_df["Model"].nunique())
+    fig_w = max(16.5, 4.8 * ncols + 0.55 * max_models)
+    fig_h = max(4.8, 3.0 * nrows + 1.7)
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), squeeze=False)
+    top = 0.86 if nrows > 1 else 0.82
+    bottom = 0.15 if nrows > 1 else 0.20
+    left = 0.08
+    right = 0.90
+    fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom, wspace=0.34, hspace=0.45)
+    cbar_ax = fig.add_axes([0.92, bottom, 0.016, top - bottom])
 
     panel_idx = 0
-    cbar_drawn = False
     for row_idx, task_name in enumerate(task_order):
         for col_idx, domain_name in enumerate(domain_order):
             ax = axes[row_idx, col_idx]
@@ -139,17 +146,23 @@ def save_performance_heatmap_panels(
                 vmax=1,
                 linewidths=0.5,
                 linecolor="white",
-                cbar=not cbar_drawn,
-                annot_kws={"fontsize": 7},
+                cbar=(row_idx == 0 and col_idx == ncols - 1),
+                cbar_ax=cbar_ax if (row_idx == 0 and col_idx == ncols - 1) else None,
+                annot_kws={"fontsize": 6.6},
             )
-            cbar_drawn = True
-            ax.set_title(f"{panel_letter}. {DOMAIN_LABELS.get(domain_name, domain_name)}", fontsize=11, pad=8)
+            for text in ax.texts[-pivot.size:]:
+                value = float(text.get_text())
+                text.set_color("white" if value >= 0.55 else TEXT_DARK)
+            ax.set_title(f"{panel_letter}. {DOMAIN_LABELS.get(domain_name, domain_name)}", fontsize=9, pad=8)
             ax.set_xlabel("")
             ax.set_ylabel(task_name if col_idx == 0 else "")
-            ax.tick_params(axis="x", rotation=28, labelsize=8)
-            ax.tick_params(axis="y", rotation=0, labelsize=9)
+            ax.tick_params(axis="x", rotation=24, labelsize=7)
+            ax.tick_params(axis="y", rotation=0, labelsize=7)
+            ax.set_xticklabels(ax.get_xticklabels(), ha="right")
 
-    fig.suptitle(title, fontsize=15, y=0.99)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    cbar_ax.set_ylabel("Performance", fontsize=7, labelpad=6)
+    cbar_ax.tick_params(labelsize=7, length=2)
+
+    fig.suptitle(title, fontsize=10, y=0.96)
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)

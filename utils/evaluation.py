@@ -14,6 +14,7 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
 )
+from utils.plot_style import PRIMARY_BLUE, PRIMARY_TEAL
 
 
 def compute_binary_metrics(y_true, proba, threshold):
@@ -306,8 +307,8 @@ def save_patient_aggregation_sensitivity_figure(summary_df, out_path):
     x = np.arange(len(summary_df))
     labels = summary_df["Aggregation"].tolist()
 
-    axes[0].bar(x - 0.17, summary_df["AUC"], 0.34, label="AUC", color="steelblue")
-    axes[0].bar(x + 0.17, summary_df["PR_AUC"], 0.34, label="PR-AUC", color="coral")
+    axes[0].bar(x - 0.17, summary_df["AUC"], 0.34, label="AUC", color=PRIMARY_BLUE)
+    axes[0].bar(x + 0.17, summary_df["PR_AUC"], 0.34, label="PR-AUC", color=PRIMARY_TEAL)
     axes[0].set_xticks(x)
     axes[0].set_xticklabels(labels, rotation=15, ha="right")
     axes[0].set_ylim(0, 1.0)
