@@ -1,0 +1,17 @@
+Split,Model,Metric,Value
+Train_OOF,Multinomial LR,Macro_AUC,0.7700057268000245
+Train_OOF,Multinomial LR,Hyper_PR_AUC,0.18912375154348562
+Train_OOF,Multinomial LR,LogLoss,0.8815175118136884
+Train_OOF,Multinomial LR,Mean_MaxProb,0.699039072167732
+Train_OOF,LightGBM,Macro_AUC,0.7824952212964519
+Train_OOF,LightGBM,Hyper_PR_AUC,0.19530241766855141
+Train_OOF,LightGBM,LogLoss,0.6789470122120339
+Train_OOF,LightGBM,Mean_MaxProb,0.9362440238518841
+Train_OOF,EnsembleMean,Macro_AUC,0.7840524395443067
+Train_OOF,EnsembleMean,Hyper_PR_AUC,0.195812425232388
+Train_OOF,EnsembleMean,LogLoss,0.5495537617905912
+Train_OOF,EnsembleMean,Mean_MaxProb,0.7641074378944711
+Test,EnsembleMean,Macro_AUC,0.7713069736840525
+Test,EnsembleMean,Hyper_PR_AUC,0.28499311806983574
+Test,EnsembleMean,LogLoss,0.5602380103216187
+Test,EnsembleMean,Mean_MaxProb,0.7565568400517985

@@ -1,5 +1,5 @@
-original_features=37
-selected_features=19
-best_c=0.05
-cv_pr_auc=0.283294
-selected_feature_names=Height, Exophthalmos, ThyroidW, TGAb, TPOAb, MaxUptake, FT3_Current, FT4_Current, Ever_Hypo_Before, Time_In_Normal, Delta_TSH_k0, Delta_FT4_1step, Pred_FT3_Next, Pred_logTSH_Next, Interval_Name_12M->18M, Interval_Name_18M->24M, Interval_Name_1M->3M, Interval_Name_6M->12M, Prev_State_2
+original_features=72
+selected_features=70
+best_c=10.0
+cv_pr_auc=0.293825
+selected_feature_names=Sex, Age, Height, Weight, BMI, Exophthalmos, ThyroidW, RAI3d, TreatCount, TGAb, TPOAb, TRAb, Uptake24h, MaxUptake, HalfLife, Dose, Start_Time, Stop_Time, Interval_Width, Prior_Relapse_Count, Event_Order, FT3_Current, FT4_Current, logTSH_Current, FT3_Baseline, FT4_Baseline, logTSH_Baseline, FT3_Prev, FT4_Prev, logTSH_Prev, FT3_Mean_ToDate, FT4_Mean_ToDate, logTSH_Mean_ToDate, FT3_STD_ToDate, FT4_STD_ToDate, logTSH_STD_ToDate, Ever_Hyper_Before, Ever_Hypo_Before, Time_In_Normal, Delta_FT4_k0, Delta_TSH_k0, Delta_FT4_1step, Delta_TSH_1step, P_next_hyper, P_next_normal, P_next_hypo, NextState_Entropy, NextState_MaxProb, Pred_Delta_FT3, Pred_Delta_FT4, Pred_Delta_logTSH, Pred_Std_FT3, Pred_Std_FT4, Pred_Std_logTSH, Pred_FT4_Margin_To_Hyper, Pred_logTSH_Margin_To_Hyper, Interval_Name_18M->24M, Interval_Name_1M->3M, Interval_Name_3M->6M, Interval_Name_6M->12M, Prev_State_0, Prev_State_1, Prev_State_2, FT4_Current_x_P_next_hyper, logTSH_Current_x_P_next_hyper, Time_In_Normal_x_P_next_hyper, Interval_Name_12M->18M_x_P_next_hyper, Interval_Name_18M->24M_x_P_next_hyper, Interval_Name_1M->3M_x_P_next_hyper, Interval_Name_6M->12M_x_P_next_hyper

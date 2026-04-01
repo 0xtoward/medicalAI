@@ -3,7 +3,6 @@ fixed_landmark_binary.py — 纯二分类甲亢截获模型
 目标: P(Hyper | 3M or 6M 截面数据)
   • MissForest (train-only)
   • Diverse model zoo + RandomizedSearchCV + OOF threshold
-  • Stacking on selected tuned baselines
 """
 import sys
 import warnings
@@ -27,8 +26,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import clone
 from sklearn.svm import SVC
 from sklearn.metrics import (roc_auc_score, average_precision_score, roc_curve,
-                             f1_score, accuracy_score, balanced_accuracy_score,
-                             confusion_matrix)
+                             f1_score, confusion_matrix)
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
@@ -269,27 +267,15 @@ def run_experiment(landmark_name, seq_len):
         suffix = "[fixed config]" if best_params is None else str(best_params)
         print(f"    {name:<18s} CV PR-AUC={best_score:.3f}  {suffix}")
 
-    # Stacking commented out: meta-learner makes SHAP uninterpretable for paper.
-    # stacking = StackingClassifier(
-    #     estimators=[
-    #         ('lr', clone(model_zoo['Logistic Reg.'][0])),
-    #         ('rf', clone(model_zoo['Random Forest'][0])),
-    #         ('lgbm', clone(model_zoo['LightGBM'][0])),
-    #     ],
-    #     final_estimator=LogisticRegression(max_iter=1000, C=1.0, random_state=S),
-    #     cv=3, n_jobs=1, passthrough=False
-    # )
-    # model_zoo["Stacking"] = (stacking, "#17becf", "-")
-
     # ---- OOF threshold + evaluate ----
     print("\n  OOF threshold selection + evaluation...")
     results = {}
 
-    hdr = (f"  {'Model':<18s} {'AUC':>5} {'PR-AUC':>7} {'Thr':>4} {'Acc':>5} "
-           f"{'BalAcc':>6} {'F1':>5}  {'TP':>3} {'FP':>4} {'FN':>3} {'TN':>4}")
-    print(f"\n{'='*85}")
+    hdr = (f"  {'Model':<18s} {'AUC':>5} {'PR-AUC':>7} {'Thr':>4} "
+           f"{'Recall':>6} {'Spec':>6} {'F1':>5}  {'TP':>3} {'FP':>4} {'FN':>3} {'TN':>4}")
+    print(f"\n{'='*79}")
     print(hdr)
-    print(f"{'='*85}")
+    print(f"{'='*79}")
 
     for name, (model, color, ls) in model_zoo.items():
         oof = np.zeros(len(y_tr))
@@ -311,22 +297,22 @@ def run_experiment(landmark_name, seq_len):
 
         auc = roc_auc_score(y_te, proba)
         prauc = average_precision_score(y_te, proba)
-        acc = accuracy_score(y_te, pred)
-        bacc = balanced_accuracy_score(y_te, pred)
         f1 = f1_score(y_te, pred, zero_division=0)
         cm = confusion_matrix(y_te, pred)
         tn, fp, fn, tp = cm.ravel()
+        recall = tp / (tp + fn) if (tp + fn) else np.nan
+        specificity = tn / (tn + fp) if (tn + fp) else np.nan
 
-        results[name] = dict(proba=proba, auc=auc, prauc=prauc, acc=acc, bacc=bacc,
+        results[name] = dict(proba=proba, auc=auc, prauc=prauc, recall=recall, specificity=specificity,
                              f1=f1, thr=best_thr, tp=tp, fp=fp, fn=fn, tn=tn,
                              model=model, color=color, ls=ls,
                              oof_proba=oof, train_fit_proba=train_fit_proba)
 
         star = " *" if auc == max(r['auc'] for r in results.values()) else "  "
-        print(f"{star}{name:<18s} {auc:>4.3f} {prauc:>6.3f} {best_thr:>3.2f} {acc:>4.3f} "
-              f"{bacc:>5.3f} {f1:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}")
+        print(f"{star}{name:<18s} {auc:>4.3f} {prauc:>6.3f} {best_thr:>3.2f} {recall:>5.3f} "
+              f"{specificity:>5.3f} {f1:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}")
 
-    print(f"{'='*85}")
+    print(f"{'='*79}")
     best_auc_name = max(results, key=lambda k: results[k]['auc'])
     best_prauc_name = max(results, key=lambda k: results[k]['prauc'])
     print(f"  Best AUC:    {best_auc_name} ({results[best_auc_name]['auc']:.3f})")
@@ -337,7 +323,7 @@ def run_experiment(landmark_name, seq_len):
         "Validation_OOF": {"y_true": y_tr, "proba_key": "oof_proba"},
         "Test_Temporal": {"y_true": y_te, "proba_key": "proba"},
     }
-    perf_metric_keys = ["auc", "recall", "specificity", "f1", "bacc"]
+    perf_metric_keys = ["auc", "recall", "specificity", "f1"]
     perf_long_df = build_binary_performance_long(
         task_name=landmark_name,
         results=results,
@@ -498,7 +484,7 @@ def main():
         Config.OUT_DIR / "Performance_Heatmaps.png",
         task_order=["3-Month", "6-Month"],
         domain_order=["Train_Fit", "Validation_OOF", "Test_Temporal"],
-        metric_order=["auc", "recall", "specificity", "f1", "bacc"],
+        metric_order=["auc", "recall", "specificity", "f1"],
         title="Fixed Landmark Internal Performance Heatmaps",
     )
     print(f"\n  Done. Results in {Config.OUT_DIR.resolve()}")

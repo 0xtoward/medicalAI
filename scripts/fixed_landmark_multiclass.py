@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, average_precision_score, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import average_precision_score, confusion_matrix, roc_auc_score, roc_curve
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.model_selection import GroupKFold
 import matplotlib.pyplot as plt
@@ -81,19 +81,13 @@ class CascadeClassifier:
 # ==========================================
 def evaluate_probs(probs, labels, model_name):
     preds = probs.argmax(axis=1)
-    acc3 = accuracy_score(labels, preds)
-    
     y_hyper = (labels == 0).astype(int)
-    pred_hyper = (preds == 0).astype(int)
-    acc_hyper = accuracy_score(y_hyper, pred_hyper)
     auc_hyper = roc_auc_score(y_hyper, probs[:, 0]) if len(np.unique(y_hyper))>1 else 0.5
     
     y_hypo = (labels == 2).astype(int)
-    pred_hypo = (preds == 2).astype(int)
-    acc_hypo = accuracy_score(y_hypo, pred_hypo)
     auc_hypo = roc_auc_score(y_hypo, probs[:, 2]) if len(np.unique(y_hypo))>1 else 0.5
     
-    print(f"[{model_name:<18}] 3分类ACC: {acc3:.3f} | 🔴 甲亢截获(AUC:{auc_hyper:.3f}/ACC:{acc_hyper:.3f}) | 🔵 甲减风险(AUC:{auc_hypo:.3f}/ACC:{acc_hypo:.3f})")
+    print(f"[{model_name:<18}] Macro triage | 🔴 甲亢截获(AUC:{auc_hyper:.3f}) | 🔵 甲减风险(AUC:{auc_hypo:.3f})")
     return probs[:, 0]
 
 def plot_roc_curves(y_te, roc_data_dict, landmark_name):
@@ -151,7 +145,6 @@ def compute_multiclass_metrics(y_true, probs):
         per_class_prauc[name] = prauc
 
     return {
-        "acc3": accuracy_score(y_true, preds),
         "macro_auc_ovr": float(np.nanmean(auc_vals)),
         "macro_prauc_ovr": float(np.nanmean(pr_vals)),
         "brier_multi": float(np.mean(np.sum((probs - onehot) ** 2, axis=1))),
@@ -166,7 +159,6 @@ def bootstrap_multiclass_cis(eval_df, group_col="Patient_ID", n_boot=800, seed=S
     grouped = {g: eval_df.loc[eval_df[group_col] == g] for g in group_values}
     rng = np.random.default_rng(seed)
     store = {
-        "acc3": [],
         "macro_auc_ovr": [],
         "macro_prauc_ovr": [],
         "brier_multi": [],
@@ -180,7 +172,6 @@ def bootstrap_multiclass_cis(eval_df, group_col="Patient_ID", n_boot=800, seed=S
         y_boot = sampled_df["Y"].values.astype(int)
         probs_boot = sampled_df[[f"proba_{i}" for i in range(len(CLASS_NAMES))]].values.astype(float)
         m = compute_multiclass_metrics(y_boot, probs_boot)
-        store["acc3"].append(m["acc3"])
         store["macro_auc_ovr"].append(m["macro_auc_ovr"])
         store["macro_prauc_ovr"].append(m["macro_prauc_ovr"])
         store["brier_multi"].append(m["brier_multi"])
@@ -305,7 +296,6 @@ def run_experiment(landmark_name, seq_len):
     })
     cis = bootstrap_multiclass_cis(eval_df)
     print(f"\n  Multi-class report on best macro-AUC model: {best_name}")
-    print(f"    3-class ACC    = {best['metrics']['acc3']:.3f}  95% CI {format_ci(cis, 'acc3')}")
     print(f"    Macro ROC-AUC  = {best['metrics']['macro_auc_ovr']:.3f}  95% CI {format_ci(cis, 'macro_auc_ovr')}")
     print(f"    Macro PR-AUC   = {best['metrics']['macro_prauc_ovr']:.3f}  95% CI {format_ci(cis, 'macro_prauc_ovr')}")
     print(f"    Multi Brier    = {best['metrics']['brier_multi']:.3f}  95% CI {format_ci(cis, 'brier_multi')}")

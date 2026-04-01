@@ -1,30 +1,170 @@
 """Helpers for two-stage physiology forecasting and relapse prediction."""
 
 from pathlib import Path
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.base import clone
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.linear_model import ElasticNet, LogisticRegression, Ridge
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import average_precision_score, log_loss, mean_absolute_error, mean_squared_error, r2_score, roc_auc_score
 from sklearn.model_selection import GroupKFold
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from lightgbm import LGBMClassifier
 
-from utils.config import SEED, STATIC_NAMES, TIME_STAMPS
-from utils.data import apply_missforest, fit_missforest, load_or_fit_depth_imputer, split_imputed
+from utils.config import SEED, STATIC_NAMES, STATE_NAMES
 from utils.plot_style import PRIMARY_BLUE, PRIMARY_TEAL, SOFT_BLUE, TEXT_DARK, TEXT_MID
 
 TARGET_COLS = ["FT3_Next", "FT4_Next", "logTSH_Next"]
+DELTA_TARGET_COLS = ["Delta_FT3_Next", "Delta_FT4_Next", "Delta_logTSH_Next"]
+CURRENT_BY_TARGET = {
+    "FT3_Next": "FT3_Current",
+    "FT4_Next": "FT4_Current",
+    "logTSH_Next": "logTSH_Current",
+}
+CURRENT_LAB_COLS = [CURRENT_BY_TARGET[target] for target in TARGET_COLS]
+STATE_TO_CODE = {name: idx for idx, name in enumerate(STATE_NAMES)}
+CODE_TO_STATE = {idx: name for name, idx in STATE_TO_CODE.items()}
+STAGE1_META_COLS = [
+    "P_next_hyper",
+    "P_next_normal",
+    "P_next_hypo",
+    "NextState_Entropy",
+    "NextState_MaxProb",
+    "Pred_Delta_FT3",
+    "Pred_Delta_FT4",
+    "Pred_Delta_logTSH",
+    "Pred_Std_FT3",
+    "Pred_Std_FT4",
+    "Pred_Std_logTSH",
+    "Pred_FT4_Margin_To_Hyper",
+    "Pred_logTSH_Margin_To_Hyper",
+]
+META_FEATURE_PRIORITY = [
+    "P_next_hyper",
+    "P_next_hypo",
+    "NextState_Entropy",
+    "NextState_MaxProb",
+    "Pred_Delta_FT4",
+    "Pred_Delta_logTSH",
+    "Pred_Std_FT4",
+    "Pred_Std_logTSH",
+    "Pred_FT4_Margin_To_Hyper",
+    "Pred_logTSH_Margin_To_Hyper",
+]
+META_VARIANTS = {
+    "state_only": META_FEATURE_PRIORITY[:4],
+    "state_delta": META_FEATURE_PRIORITY[:6],
+    "state_delta_uncertainty": META_FEATURE_PRIORITY[:8],
+}
+
+HISTORY_FEATURE_COLS = [
+    "FT3_Baseline",
+    "FT4_Baseline",
+    "logTSH_Baseline",
+    "FT3_Prev",
+    "FT4_Prev",
+    "logTSH_Prev",
+    "FT3_Mean_ToDate",
+    "FT4_Mean_ToDate",
+    "logTSH_Mean_ToDate",
+    "FT3_STD_ToDate",
+    "FT4_STD_ToDate",
+    "logTSH_STD_ToDate",
+]
+
+CURRENT_CONTEXT_COLS = STATIC_NAMES + [
+    "Start_Time",
+    "Stop_Time",
+    "Interval_Width",
+    "Prior_Relapse_Count",
+    "Event_Order",
+    "FT3_Current",
+    "FT4_Current",
+    "logTSH_Current",
+    *HISTORY_FEATURE_COLS,
+    "Ever_Hyper_Before",
+    "Ever_Hypo_Before",
+    "Time_In_Normal",
+    "Delta_FT4_k0",
+    "Delta_TSH_k0",
+    "Delta_FT4_1step",
+    "Delta_TSH_1step",
+]
 
 
 def _format_p_value(p_value):
     if p_value < 1e-3:
         return "p < 0.001"
     return f"p = {p_value:.3f}"
+
+
+def _safe_model_tag(name):
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_")
+
+
+def _existing_columns(df, columns):
+    return [col for col in columns if col in df.columns]
+
+
+def _state_entropy(proba):
+    proba = np.clip(np.asarray(proba, dtype=float), 1e-8, 1.0)
+    ent = -np.sum(proba * np.log(proba), axis=1)
+    return ent / np.log(proba.shape[1])
+
+
+def _build_delta_targets(df):
+    return np.column_stack(
+        [
+            df["FT3_Next"].values.astype(float) - df["FT3_Current"].values.astype(float),
+            df["FT4_Next"].values.astype(float) - df["FT4_Current"].values.astype(float),
+            df["logTSH_Next"].values.astype(float) - df["logTSH_Current"].values.astype(float),
+        ]
+    )
+
+
+def _reconstruct_next_labs(df, delta_pred):
+    delta_pred = np.asarray(delta_pred, dtype=float)
+    current = df[CURRENT_LAB_COLS].values.astype(float)
+    return current + delta_pred
+
+
+def _fit_empirical_hyper_margin_reference(train_df):
+    refs = {}
+    y_hyper = (train_df["Next_State"].astype(str).values == "Hyper").astype(int)
+    for source_col, short_name in [("FT4_Next", "FT4"), ("logTSH_Next", "logTSH")]:
+        values = train_df[source_col].values.astype(float)
+        pos = values[y_hyper == 1]
+        neg = values[y_hyper == 0]
+        if len(pos) == 0 or len(neg) == 0:
+            refs[short_name] = {"threshold": float(np.nanmedian(values)), "direction": 1.0}
+            continue
+        pos_median = float(np.nanmedian(pos))
+        neg_median = float(np.nanmedian(neg))
+        direction = 1.0 if pos_median >= neg_median else -1.0
+        refs[short_name] = {"threshold": 0.5 * (pos_median + neg_median), "direction": direction}
+    return refs
+
+
+def _compute_margin(values, ref):
+    return ref["direction"] * (np.asarray(values, dtype=float) - ref["threshold"])
+
+
+def get_meta_feature_subset(df, variant="state_delta_uncertainty", max_features=None):
+    """Return a compact priority-ordered subset of stage-1 meta-features."""
+    if variant == "all_priority":
+        priority = META_FEATURE_PRIORITY
+    else:
+        priority = META_VARIANTS.get(variant, META_VARIANTS["state_delta_uncertainty"])
+    cols = [col for col in priority if col in df.columns]
+    if max_features is not None:
+        cols = cols[: int(max_features)]
+    return cols
 
 
 def build_next_physio_targets(X_d_next, S_matrix, pids, target_k=None, row_ids=None):
@@ -56,52 +196,54 @@ def build_next_physio_targets(X_d_next, S_matrix, pids, target_k=None, row_ids=N
     return pd.DataFrame(rows, columns=cols)
 
 
-def prepare_physio_target_tables(X_s_raw, ft3_raw, ft4_raw, tsh_raw, pids, tr_mask, te_mask, out_dir):
-    """Impute horizon-safe next-window physiology labels without using future eval labels."""
-    out_dir = Path(out_dir)
-    n_static = X_s_raw.shape[1]
-    train_parts = []
-    test_parts = []
+def build_physio_history_features(X_d, S_matrix, pids, target_k=None, row_ids=None):
+    """Attach raw trajectory summaries for the current landmark."""
+    rows = []
+    n_samples, n_timepoints = S_matrix.shape
+    k_range = [target_k] if target_k is not None else range(n_timepoints - 1)
+    if row_ids is None:
+        row_ids = np.arange(n_samples)
 
-    for depth in range(1, 7):
-        # For interval k=depth-1 -> k+1, targets require lab sequence up to depth+1.
-        if depth + 1 > len(TIME_STAMPS):
-            continue
-        k = depth - 1
-        n_lab = depth + 1
-        interval_name = f"{TIME_STAMPS[k]}->{TIME_STAMPS[k + 1]}"
-        raw = np.hstack([X_s_raw, ft3_raw[:, :n_lab], ft4_raw[:, :n_lab], tsh_raw[:, :n_lab]])
-        imp_path = out_dir / f"missforest_physio_depth{depth}.pkl"
-        imputer = load_or_fit_depth_imputer(raw[tr_mask], imp_path)
+    for i in range(n_samples):
+        pid = pids[i]
+        row_id = int(row_ids[i])
+        for k in k_range:
+            if int(S_matrix[i, k]) != 1:
+                continue
 
-        filled_tr = apply_missforest(raw[tr_mask], imputer, 0)
-        filled_te = apply_missforest(raw[te_mask], imputer, 0)
-        _, ft3_tr, ft4_tr, tsh_tr = split_imputed(filled_tr, n_static, n_lab, 0)
-        _, ft3_te, ft4_te, tsh_te = split_imputed(filled_te, n_static, n_lab, 0)
-        x_d_tr = np.stack([ft3_tr, ft4_tr, tsh_tr], axis=-1)
-        x_d_te = np.stack([ft3_te, ft4_te, tsh_te], axis=-1)
+            hist = X_d[i, : k + 1, :]
+            prev = X_d[i, k - 1, :] if k > 0 else X_d[i, k, :]
+            base = X_d[i, 0, :]
+            hist_log_tsh = np.log1p(np.clip(hist[:, 2], 0, None))
 
-        train_parts.append((interval_name, x_d_tr))
-        test_parts.append((interval_name, x_d_te))
+            rows.append(
+                {
+                    "Patient_ID": pid,
+                    "Source_Row": row_id,
+                    "Interval_ID": k,
+                    "FT3_Baseline": float(base[0]),
+                    "FT4_Baseline": float(base[1]),
+                    "logTSH_Baseline": float(np.log1p(np.clip(base[2], 0, None))),
+                    "FT3_Prev": float(prev[0]),
+                    "FT4_Prev": float(prev[1]),
+                    "logTSH_Prev": float(np.log1p(np.clip(prev[2], 0, None))),
+                    "FT3_Mean_ToDate": float(np.mean(hist[:, 0])),
+                    "FT4_Mean_ToDate": float(np.mean(hist[:, 1])),
+                    "logTSH_Mean_ToDate": float(np.mean(hist_log_tsh)),
+                    "FT3_STD_ToDate": float(np.std(hist[:, 0])),
+                    "FT4_STD_ToDate": float(np.std(hist[:, 1])),
+                    "logTSH_STD_ToDate": float(np.std(hist_log_tsh)),
+                }
+            )
 
-    return train_parts, test_parts
+    cols = ["Patient_ID", "Source_Row", "Interval_ID", *HISTORY_FEATURE_COLS]
+    return pd.DataFrame(rows, columns=cols)
 
 
 def make_stage1_feature_frames(train_df, test_df):
     """Create stage-1 regression features from current known information."""
-    feat_cols = STATIC_NAMES + [
-        "FT3_Current",
-        "FT4_Current",
-        "logTSH_Current",
-        "Ever_Hyper_Before",
-        "Ever_Hypo_Before",
-        "Time_In_Normal",
-        "Delta_FT4_k0",
-        "Delta_TSH_k0",
-        "Delta_FT4_1step",
-        "Delta_TSH_1step",
-    ]
-    cat_cols = ["Interval_Name", "Prev_State"]
+    feat_cols = _existing_columns(train_df, CURRENT_CONTEXT_COLS)
+    cat_cols = [col for col in ["Interval_Name", "Prev_State"] if col in train_df.columns]
     tr = train_df[feat_cols + cat_cols].copy().reset_index(drop=True)
     te = test_df[feat_cols + cat_cols].copy().reset_index(drop=True)
 
@@ -122,26 +264,103 @@ def make_stage1_feature_frames(train_df, test_df):
 
 
 def get_stage1_models():
-    """Candidate next-physiology forecasting models."""
+    """Candidate delta-regression models for future physiology."""
     return {
-        "Ridge": Pipeline(
+        "Ridge": {
+            "model": Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("reg", Ridge(alpha=1.0, random_state=SEED)),
+                ]
+            ),
+            "per_interval": False,
+        },
+        "ElasticNet": {
+            "model": Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "reg",
+                        MultiOutputRegressor(
+                            ElasticNet(alpha=0.01, l1_ratio=0.5, random_state=SEED, max_iter=5000)
+                        ),
+                    ),
+                ]
+            ),
+            "per_interval": False,
+        },
+        "RandomForest": {
+            "model": RandomForestRegressor(
+                n_estimators=400,
+                min_samples_leaf=5,
+                max_features="sqrt",
+                random_state=SEED,
+                n_jobs=1,
+            ),
+            "per_interval": False,
+        },
+        "ExtraTrees": {
+            "model": ExtraTreesRegressor(
+                n_estimators=500,
+                min_samples_leaf=3,
+                max_features="sqrt",
+                random_state=SEED,
+                n_jobs=1,
+            ),
+            "per_interval": False,
+        },
+        "RandomForest_ByWindow": {
+            "model": RandomForestRegressor(
+                n_estimators=300,
+                min_samples_leaf=4,
+                max_features="sqrt",
+                random_state=SEED,
+                n_jobs=1,
+            ),
+            "per_interval": True,
+        },
+        "ExtraTrees_ByWindow": {
+            "model": ExtraTreesRegressor(
+                n_estimators=400,
+                min_samples_leaf=3,
+                max_features="sqrt",
+                random_state=SEED,
+                n_jobs=1,
+            ),
+            "per_interval": True,
+        },
+    }
+
+
+def get_next_state_models():
+    """Candidate next-state classifiers."""
+    return {
+        "Multinomial LR": Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("reg", Ridge(alpha=1.0, random_state=SEED)),
+                (
+                    "clf",
+                    LogisticRegression(
+                        max_iter=4000,
+                        multi_class="multinomial",
+                        class_weight="balanced",
+                        random_state=SEED,
+                    ),
+                ),
             ]
         ),
-        "ElasticNet": Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                ("reg", MultiOutputRegressor(ElasticNet(alpha=0.01, l1_ratio=0.5, random_state=SEED, max_iter=5000))),
-            ]
-        ),
-        "RandomForest": RandomForestRegressor(
-            n_estimators=300,
-            min_samples_leaf=5,
-            max_features="sqrt",
+        "LightGBM": LGBMClassifier(
+            objective="multiclass",
+            num_class=len(STATE_NAMES),
+            n_estimators=220,
+            learning_rate=0.05,
+            num_leaves=31,
+            min_child_samples=20,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            class_weight="balanced",
             random_state=SEED,
-            n_jobs=1,
+            verbose=-1,
         ),
     }
 
@@ -175,26 +394,126 @@ def evaluate_physio_predictions(y_true, y_pred, split_name, model_name):
     return pd.concat([df, pd.DataFrame([avg])], ignore_index=True)
 
 
-def run_stage1_oof_forecast(X_train, y_train, X_test, groups, out_dir):
-    """Train stage-1 models with OOF predictions and return best model outputs."""
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    gkf = GroupKFold(n_splits=3)
+def evaluate_next_state_predictions(y_true, proba, split_name, model_name):
+    """Summarize next-state classification quality."""
+    y_true = np.asarray(y_true, dtype=int)
+    proba = np.clip(np.asarray(proba, dtype=float), 1e-8, 1 - 1e-8)
+    try:
+        macro_auc = roc_auc_score(y_true, proba, multi_class="ovr", average="macro", labels=list(range(len(STATE_NAMES))))
+    except Exception:
+        macro_auc = np.nan
+    hyper_pr_auc = average_precision_score((y_true == STATE_TO_CODE["Hyper"]).astype(int), proba[:, STATE_TO_CODE["Hyper"]])
+    rows = [
+        {"Split": split_name, "Model": model_name, "Metric": "Macro_AUC", "Value": macro_auc},
+        {"Split": split_name, "Model": model_name, "Metric": "Hyper_PR_AUC", "Value": hyper_pr_auc},
+        {"Split": split_name, "Model": model_name, "Metric": "LogLoss", "Value": log_loss(y_true, proba, labels=list(range(len(STATE_NAMES))))},
+        {
+            "Split": split_name,
+            "Model": model_name,
+            "Metric": "Mean_MaxProb",
+            "Value": float(np.mean(np.max(proba, axis=1))),
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _fit_stage1_model(
+    base_model,
+    X_fit,
+    y_fit,
+    X_pred,
+    fit_intervals=None,
+    pred_intervals=None,
+    per_interval=False,
+):
+    """Fit a global or interval-specific regression model and return predictions."""
+    if not per_interval:
+        model = clone(base_model)
+        model.fit(X_fit, y_fit)
+        return model, model.predict(X_pred)
+
+    global_model = clone(base_model)
+    global_model.fit(X_fit, y_fit)
+    pred = global_model.predict(X_pred)
+    fitted = {"__global__": global_model}
+
+    fit_intervals = np.asarray(fit_intervals)
+    pred_intervals = np.asarray(pred_intervals)
+    for interval_name in sorted(pd.Index(fit_intervals).dropna().unique()):
+        fit_mask = fit_intervals == interval_name
+        pred_mask = pred_intervals == interval_name
+        if int(fit_mask.sum()) < 24 or not np.any(pred_mask):
+            continue
+        local_model = clone(base_model)
+        local_model.fit(X_fit.iloc[fit_mask], y_fit[fit_mask])
+        pred[pred_mask] = local_model.predict(X_pred.iloc[pred_mask])
+        fitted[str(interval_name)] = local_model
+    return fitted, pred
+
+
+def _run_delta_oof_forecast(X_train, train_df, X_test, test_df, groups, train_intervals, test_intervals):
+    """Train stage-1 delta models and evaluate on reconstructed next labs."""
+    y_delta_train = _build_delta_targets(train_df)
+    y_next_train = train_df[TARGET_COLS].values.astype(float)
+    n_splits = min(3, len(pd.Index(groups).drop_duplicates()))
+    gkf = GroupKFold(n_splits=n_splits)
     metric_frames = []
     results = {}
 
-    for name, base_model in get_stage1_models().items():
-        oof_pred = np.zeros_like(y_train, dtype=float)
-        for tr_idx, val_idx in gkf.split(X_train, groups=groups):
-            model = base_model
-            model.fit(X_train.iloc[tr_idx], y_train[tr_idx])
-            oof_pred[val_idx] = model.predict(X_train.iloc[val_idx])
-        test_model = base_model
-        test_model.fit(X_train, y_train)
-        test_pred = test_model.predict(X_test)
-        oof_metrics = evaluate_physio_predictions(y_train, oof_pred, "Train_OOF", name)
-        metric_frames.append(oof_metrics)
-        results[name] = {"model": test_model, "oof_pred": oof_pred, "test_pred": test_pred}
+    for name, payload in get_stage1_models().items():
+        base_model = payload["model"]
+        per_interval = bool(payload.get("per_interval", False))
+        oof_delta = np.zeros_like(y_delta_train, dtype=float)
+        for tr_idx, val_idx in gkf.split(X_train, y_delta_train, groups=groups):
+            _, fold_pred = _fit_stage1_model(
+                base_model,
+                X_train.iloc[tr_idx],
+                y_delta_train[tr_idx],
+                X_train.iloc[val_idx],
+                fit_intervals=np.asarray(train_intervals)[tr_idx],
+                pred_intervals=np.asarray(train_intervals)[val_idx],
+                per_interval=per_interval,
+            )
+            oof_delta[val_idx] = fold_pred
+        fitted_model, test_delta = _fit_stage1_model(
+            base_model,
+            X_train,
+            y_delta_train,
+            X_test,
+            fit_intervals=train_intervals,
+            pred_intervals=test_intervals,
+            per_interval=per_interval,
+        )
+        oof_next = _reconstruct_next_labs(train_df, oof_delta)
+        test_next = _reconstruct_next_labs(test_df, test_delta)
+        metric_frames.append(evaluate_physio_predictions(y_next_train, oof_next, "Train_OOF", name))
+        results[name] = {
+            "model": fitted_model,
+            "oof_delta": oof_delta,
+            "test_delta": test_delta,
+            "oof_next": oof_next,
+            "test_next": test_next,
+            "per_interval": per_interval,
+        }
+
+    base_names = list(results.keys())
+    if base_names:
+        oof_delta_stack = np.stack([results[name]["oof_delta"] for name in base_names], axis=0)
+        test_delta_stack = np.stack([results[name]["test_delta"] for name in base_names], axis=0)
+        ensemble_name = "EnsembleMean"
+        ensemble_oof_delta = np.mean(oof_delta_stack, axis=0)
+        ensemble_test_delta = np.mean(test_delta_stack, axis=0)
+        results[ensemble_name] = {
+            "model": {"members": base_names, "type": "mean_ensemble"},
+            "oof_delta": ensemble_oof_delta,
+            "test_delta": ensemble_test_delta,
+            "oof_next": _reconstruct_next_labs(train_df, ensemble_oof_delta),
+            "test_next": _reconstruct_next_labs(test_df, ensemble_test_delta),
+            "per_interval": False,
+        }
+        metric_frames.append(
+            evaluate_physio_predictions(y_next_train, results[ensemble_name]["oof_next"], "Train_OOF", ensemble_name)
+        )
 
     metrics_df = pd.concat(metric_frames, ignore_index=True)
     best_name = (
@@ -205,8 +524,72 @@ def run_stage1_oof_forecast(X_train, y_train, X_test, groups, out_dir):
     return best_name, results, metrics_df
 
 
+def _run_next_state_oof_forecast(X_train, train_df, X_test, test_df, groups):
+    """Train next-state classifiers with grouped OOF probabilities."""
+    y_state_train = train_df["Next_State"].map(STATE_TO_CODE).values.astype(int)
+    y_state_test = test_df["Next_State"].map(STATE_TO_CODE).values.astype(int)
+    n_splits = min(3, len(pd.Index(groups).drop_duplicates()))
+    gkf = GroupKFold(n_splits=n_splits)
+    metric_frames = []
+    results = {}
+
+    for name, base_model in get_next_state_models().items():
+        oof_proba = np.zeros((len(y_state_train), len(STATE_NAMES)), dtype=float)
+        for tr_idx, val_idx in gkf.split(X_train, y_state_train, groups=groups):
+            model = clone(base_model)
+            model.fit(X_train.iloc[tr_idx], y_state_train[tr_idx])
+            oof_proba[val_idx] = model.predict_proba(X_train.iloc[val_idx])
+        fitted = clone(base_model)
+        fitted.fit(X_train, y_state_train)
+        test_proba = fitted.predict_proba(X_test)
+        metric_frames.append(evaluate_next_state_predictions(y_state_train, oof_proba, "Train_OOF", name))
+        results[name] = {
+            "model": fitted,
+            "oof_proba": oof_proba,
+            "test_proba": test_proba,
+        }
+
+    base_names = list(results.keys())
+    if base_names:
+        oof_stack = np.stack([results[name]["oof_proba"] for name in base_names], axis=0)
+        test_stack = np.stack([results[name]["test_proba"] for name in base_names], axis=0)
+        results["EnsembleMean"] = {
+            "model": {"members": base_names, "type": "mean_ensemble"},
+            "oof_proba": np.mean(oof_stack, axis=0),
+            "test_proba": np.mean(test_stack, axis=0),
+        }
+        metric_frames.append(evaluate_next_state_predictions(y_state_train, results["EnsembleMean"]["oof_proba"], "Train_OOF", "EnsembleMean"))
+
+    metrics_df = pd.concat(metric_frames, ignore_index=True)
+    score_df = metrics_df.pivot_table(index="Model", columns="Metric", values="Value")
+    best_name = score_df.sort_values(["Hyper_PR_AUC", "Macro_AUC"], ascending=[False, False]).index[0]
+    test_metrics = evaluate_next_state_predictions(y_state_test, results[best_name]["test_proba"], "Test", best_name)
+    return best_name, results, pd.concat([metrics_df, test_metrics], ignore_index=True)
+
+
+def run_stage1_oof_forecast(X_train, train_df, X_test, test_df, groups, train_intervals, test_intervals, out_dir):
+    """Train stage-1 delta and next-state heads, then return compact meta-feature payloads."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    delta_best_name, delta_results, delta_metrics = _run_delta_oof_forecast(
+        X_train, train_df, X_test, test_df, groups, train_intervals, test_intervals
+    )
+    state_best_name, state_results, state_metrics = _run_next_state_oof_forecast(
+        X_train, train_df, X_test, test_df, groups
+    )
+    return {
+        "delta_best_name": delta_best_name,
+        "delta_results": delta_results,
+        "delta_metrics": delta_metrics,
+        "state_best_name": state_best_name,
+        "state_results": state_results,
+        "state_metrics": state_metrics,
+        "hyper_margin_reference": _fit_empirical_hyper_margin_reference(train_df),
+    }
+
+
 def add_predicted_physio_columns(df, pred_array, prefix="Pred"):
-    """Append predicted next-window physiology columns to a dataframe copy."""
+    """Append one set of predicted next-window physiology columns to a dataframe copy."""
     out = df.copy()
     out[f"{prefix}_FT3_Next"] = pred_array[:, 0]
     out[f"{prefix}_FT4_Next"] = pred_array[:, 1]
@@ -214,45 +597,144 @@ def add_predicted_physio_columns(df, pred_array, prefix="Pred"):
     return out
 
 
-def make_stage2_feature_frames(train_df, test_df, mode):
-    """Create stage-2 classification features for three comparison groups."""
-    pred_cols = ["Pred_FT3_Next", "Pred_FT4_Next", "Pred_logTSH_Next"]
-    current_cols = STATIC_NAMES + [
-        "FT3_Current",
-        "FT4_Current",
-        "logTSH_Current",
-        "Ever_Hyper_Before",
-        "Ever_Hypo_Before",
-        "Time_In_Normal",
-        "Delta_FT4_k0",
-        "Delta_TSH_k0",
-        "Delta_FT4_1step",
-        "Delta_TSH_1step",
-    ]
-    cat_cols = ["Interval_Name", "Prev_State"]
+def add_stage1_prediction_family(df, stage1_payload, split_key):
+    """Append compact state-aware, delta-aware, and uncertainty-aware meta-features."""
+    out = df.copy()
+    delta_key = f"{split_key}_delta"
+    state_key = f"{split_key}_proba"
+    delta_arrays = []
+    state_arrays = []
 
-    if mode == "direct":
-        feat_cols = current_cols
-    elif mode == "predicted_only":
-        feat_cols = pred_cols
-        cat_cols = []
-    elif mode == "predicted_plus_current":
-        feat_cols = current_cols + pred_cols
+    for model_name in sorted(stage1_payload["delta_results"]):
+        payload = stage1_payload["delta_results"][model_name]
+        arr = np.asarray(payload.get(delta_key), dtype=float)
+        if arr.ndim == 2 and arr.shape[1] == len(DELTA_TARGET_COLS):
+            delta_arrays.append(arr)
+
+    for model_name in sorted(stage1_payload["state_results"]):
+        payload = stage1_payload["state_results"][model_name]
+        arr = np.asarray(payload.get(state_key), dtype=float)
+        if arr.ndim == 2 and arr.shape[1] == len(STATE_NAMES):
+            state_arrays.append(arr)
+
+    if not delta_arrays or not state_arrays:
+        return out
+
+    delta_stack = np.stack(delta_arrays, axis=0)
+    state_stack = np.stack(state_arrays, axis=0)
+    mean_delta = np.mean(delta_stack, axis=0)
+    std_delta = np.std(delta_stack, axis=0)
+    mean_state = np.mean(state_stack, axis=0)
+
+    out["P_next_hyper"] = mean_state[:, STATE_TO_CODE["Hyper"]]
+    out["P_next_normal"] = mean_state[:, STATE_TO_CODE["Normal"]]
+    out["P_next_hypo"] = mean_state[:, STATE_TO_CODE["Hypo"]]
+    out["NextState_Entropy"] = _state_entropy(mean_state)
+    out["NextState_MaxProb"] = np.max(mean_state, axis=1)
+
+    out["Pred_Delta_FT3"] = mean_delta[:, 0]
+    out["Pred_Delta_FT4"] = mean_delta[:, 1]
+    out["Pred_Delta_logTSH"] = mean_delta[:, 2]
+    out["Pred_Std_FT3"] = std_delta[:, 0]
+    out["Pred_Std_FT4"] = std_delta[:, 1]
+    out["Pred_Std_logTSH"] = std_delta[:, 2]
+
+    pred_ft4_next = out["FT4_Current"].values.astype(float) + mean_delta[:, 1]
+    pred_logtsh_next = out["logTSH_Current"].values.astype(float) + mean_delta[:, 2]
+    refs = stage1_payload["hyper_margin_reference"]
+    out["Pred_FT4_Margin_To_Hyper"] = _compute_margin(pred_ft4_next, refs["FT4"])
+    out["Pred_logTSH_Margin_To_Hyper"] = _compute_margin(pred_logtsh_next, refs["logTSH"])
+    return out
+
+
+def make_stage2_feature_frames(train_df, test_df, mode, base_current_features=None):
+    """Create compact stage-2 feature frames for direct, ablation, and fusion-style branches."""
+    mode_alias = {
+        "predicted_only": "predicted_only_compact",
+        "predicted_only_state_delta_uncertainty": "predicted_only_compact",
+        "predicted_plus_current": "predicted_plus_current_compact",
+    }
+    mode = mode_alias.get(mode, mode)
+
+    include_current = mode in {
+        "direct",
+        "predicted_plus_current_compact",
+        "direct_plus_state_only",
+        "direct_plus_state_delta",
+        "direct_plus_state_delta_uncertainty",
+    }
+    include_interactions = mode == "predicted_plus_current_compact"
+
+    if mode in {
+        "predicted_only_compact",
+        "predicted_plus_current_compact",
+        "direct_plus_state_delta_uncertainty",
+    }:
+        meta_variant = "state_delta_uncertainty"
+    elif mode == "predicted_only_state_delta":
+        meta_variant = "state_delta"
+    elif mode == "predicted_only_state_only":
+        meta_variant = "state_only"
+    elif mode == "direct_plus_state_delta":
+        meta_variant = "state_delta"
+    elif mode == "direct_plus_state_only":
+        meta_variant = "state_only"
+    elif mode == "direct":
+        meta_variant = None
     else:
         raise ValueError(f"Unknown stage-2 mode: {mode}")
 
-    tr = train_df[feat_cols + cat_cols].copy().reset_index(drop=True)
-    te = test_df[feat_cols + cat_cols].copy().reset_index(drop=True)
+    current_cols = _existing_columns(train_df, CURRENT_CONTEXT_COLS)
+    cat_cols = [col for col in ["Interval_Name", "Prev_State"] if col in train_df.columns] if include_current else []
 
+    tr_cur = train_df[current_cols + cat_cols].copy().reset_index(drop=True)
+    te_cur = test_df[current_cols + cat_cols].copy().reset_index(drop=True)
     for col in cat_cols:
         cats = sorted(train_df[col].astype(str).unique())
         for cat in cats:
             name = f"{col}_{cat}"
-            tr[name] = (train_df[col].astype(str).values == cat).astype(float)
-            te[name] = (test_df[col].astype(str).values == cat).astype(float)
+            tr_cur[name] = (train_df[col].astype(str).values == cat).astype(float)
+            te_cur[name] = (test_df[col].astype(str).values == cat).astype(float)
+    tr_cur = tr_cur.drop(columns=cat_cols).replace([np.inf, -np.inf], np.nan)
+    te_cur = te_cur.drop(columns=cat_cols).replace([np.inf, -np.inf], np.nan)
+    med_cur = tr_cur.median(numeric_only=True)
+    tr_cur = tr_cur.fillna(med_cur)
+    te_cur = te_cur.fillna(med_cur)
 
-    tr = tr.drop(columns=cat_cols).replace([np.inf, -np.inf], np.nan)
-    te = te.drop(columns=cat_cols).replace([np.inf, -np.inf], np.nan)
+    if include_current:
+        if base_current_features is None:
+            current_keep = [c for c in tr_cur.columns if tr_cur[c].nunique(dropna=False) > 1]
+        else:
+            current_keep = [c for c in base_current_features if c in tr_cur.columns]
+        tr_parts = [tr_cur[current_keep].copy()]
+        te_parts = [te_cur[current_keep].copy()]
+    else:
+        tr_parts = []
+        te_parts = []
+
+    if meta_variant is not None:
+        meta_cols = get_meta_feature_subset(train_df, variant=meta_variant)
+        tr_meta = train_df[meta_cols].copy().reset_index(drop=True)
+        te_meta = test_df[meta_cols].copy().reset_index(drop=True)
+        tr_parts.append(tr_meta)
+        te_parts.append(te_meta)
+
+    tr = pd.concat(tr_parts, axis=1) if tr_parts else pd.DataFrame(index=np.arange(len(train_df)))
+    te = pd.concat(te_parts, axis=1) if te_parts else pd.DataFrame(index=np.arange(len(test_df)))
+
+    if include_interactions and "P_next_hyper" in tr.columns:
+        for base_col in ["FT4_Current", "logTSH_Current", "Time_In_Normal"]:
+            if base_col in tr.columns:
+                inter_name = f"{base_col}_x_P_next_hyper"
+                tr[inter_name] = tr[base_col].values * tr["P_next_hyper"].values
+                te[inter_name] = te[base_col].values * te["P_next_hyper"].values
+        for dummy_col in [c for c in tr.columns if c.startswith("Interval_Name_")]:
+            inter_name = f"{dummy_col}_x_P_next_hyper"
+            tr[inter_name] = tr[dummy_col].values * tr["P_next_hyper"].values
+            te[inter_name] = te[dummy_col].values * te["P_next_hyper"].values
+
+    tr = tr.replace([np.inf, -np.inf], np.nan)
+    te = te.replace([np.inf, -np.inf], np.nan)
     medians = tr.median(numeric_only=True)
     tr = tr.fillna(medians)
     te = te.fillna(medians)
@@ -261,7 +743,7 @@ def make_stage2_feature_frames(train_df, test_df, mode):
 
 
 def get_stage2_models():
-    """Simple interpretable classifiers for stage-2 relapse prediction."""
+    """Backward-compatible simple classifiers for stage-2 relapse prediction."""
     return {
         "Logistic Reg.": Pipeline(
             [
@@ -272,7 +754,16 @@ def get_stage2_models():
         "Elastic LR": Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("lr", LogisticRegression(max_iter=5000, penalty="elasticnet", solver="saga", l1_ratio=0.5, random_state=SEED)),
+                (
+                    "lr",
+                    LogisticRegression(
+                        max_iter=5000,
+                        penalty="elasticnet",
+                        solver="saga",
+                        l1_ratio=0.5,
+                        random_state=SEED,
+                    ),
+                ),
             ]
         ),
     }
@@ -410,7 +901,7 @@ def save_physio_scatter(y_true, y_pred, out_dir, model_name, split_name):
             [
                 f"MAE = {mae:.3f}",
                 f"RMSE = {rmse:.3f}",
-                f"R$^2$ = {r2:.3f}",
+                f"R^2 = {r2:.3f}",
                 f"r = {corr_r:.3f}",
                 _format_p_value(corr_p),
             ]
@@ -442,19 +933,19 @@ def save_stage1_metric_bar(metrics_df, out_dir):
     """Save stage-1 forecast error comparison."""
     out_dir = Path(out_dir)
     avg_df = metrics_df[metrics_df["Target"] == "Average"].copy()
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.2))
+    fig, axes = plt.subplots(1, 2, figsize=(11.6, 4.2))
     rmse_bars = axes[0].bar(avg_df["Model"], avg_df["RMSE"], color=PRIMARY_BLUE, alpha=0.88)
     axes[0].set_title("Average RMSE by stage-1 model", fontsize=9)
-    axes[0].tick_params(axis="x", rotation=18, labelsize=7)
+    axes[0].tick_params(axis="x", rotation=20, labelsize=7)
     axes[0].grid(axis="y", alpha=0.25)
     r2_bars = axes[1].bar(avg_df["Model"], avg_df["R2"], color=PRIMARY_TEAL, alpha=0.88)
-    axes[1].set_title("Average R$^2$ by stage-1 model", fontsize=9)
-    axes[1].tick_params(axis="x", rotation=18, labelsize=7)
+    axes[1].set_title("Average R^2 by stage-1 model", fontsize=9)
+    axes[1].tick_params(axis="x", rotation=20, labelsize=7)
     axes[1].grid(axis="y", alpha=0.25)
     axes[0].set_ylim(0, float(avg_df["RMSE"].max()) * 1.12)
-    axes[1].set_ylim(0, max(0.08, float(avg_df["R2"].max()) * 1.30))
+    axes[1].set_ylim(min(-0.05, float(avg_df["R2"].min()) - 0.03), max(0.08, float(avg_df["R2"].max()) * 1.30))
     for bars, ax in [(rmse_bars, axes[0]), (r2_bars, axes[1])]:
-        y_offset = 0.02 * ax.get_ylim()[1]
+        y_offset = 0.02 * (ax.get_ylim()[1] - ax.get_ylim()[0])
         for bar in bars:
             ax.text(
                 bar.get_x() + bar.get_width() / 2,

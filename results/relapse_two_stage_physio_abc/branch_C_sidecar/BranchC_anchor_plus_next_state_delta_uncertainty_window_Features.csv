@@ -1,0 +1,11 @@
+feature
+Direct_Anchor_Score
+P_next_hyper
+P_next_hypo
+Pred_Delta_FT4
+Pred_Delta_logTSH
+NextState_Entropy
+Pred_Std_FT4
+Pred_Std_logTSH
+Start_Time_x_P_next_hyper
+Interval_Width_x_P_next_hyper

@@ -104,18 +104,3 @@ Rolling Landmark,Test_Temporal,Temporal Test,Cox PH,auc,AUC,0.8386531222606095,0
 Rolling Landmark,Test_Temporal,Temporal Test,Cox PH,recall,Sensitivity,0.926829268292683,0.59,514,41
 Rolling Landmark,Test_Temporal,Temporal Test,Cox PH,specificity,Specificity,0.6236786469344608,0.59,514,41
 Rolling Landmark,Test_Temporal,Temporal Test,Cox PH,f1,F1,0.29571984435797666,0.59,514,41
-Rolling Landmark,Train_Fit,Train Fit,Stacking,prauc,PR-AUC,0.6836380218697305,0.13999999999999999,2096,169
-Rolling Landmark,Train_Fit,Train Fit,Stacking,auc,AUC,0.9479615430675268,0.13999999999999999,2096,169
-Rolling Landmark,Train_Fit,Train Fit,Stacking,recall,Sensitivity,0.9112426035502958,0.13999999999999999,2096,169
-Rolling Landmark,Train_Fit,Train Fit,Stacking,specificity,Specificity,0.8261546445251686,0.13999999999999999,2096,169
-Rolling Landmark,Train_Fit,Train Fit,Stacking,f1,F1,0.46808510638297873,0.13999999999999999,2096,169
-Rolling Landmark,Validation_OOF,Validation OOF,Stacking,prauc,PR-AUC,0.19399576844500285,0.13999999999999999,2096,169
-Rolling Landmark,Validation_OOF,Validation OOF,Stacking,auc,AUC,0.7932648166970151,0.13999999999999999,2096,169
-Rolling Landmark,Validation_OOF,Validation OOF,Stacking,recall,Sensitivity,0.514792899408284,0.13999999999999999,2096,169
-Rolling Landmark,Validation_OOF,Validation OOF,Stacking,specificity,Specificity,0.8391281785158277,0.13999999999999999,2096,169
-Rolling Landmark,Validation_OOF,Validation OOF,Stacking,f1,F1,0.30742049469964666,0.13999999999999999,2096,169
-Rolling Landmark,Test_Temporal,Temporal Test,Stacking,prauc,PR-AUC,0.24848027053913813,0.13999999999999999,514,41
-Rolling Landmark,Test_Temporal,Temporal Test,Stacking,auc,AUC,0.8123549734440262,0.13999999999999999,514,41
-Rolling Landmark,Test_Temporal,Temporal Test,Stacking,recall,Sensitivity,0.6097560975609756,0.13999999999999999,514,41
-Rolling Landmark,Test_Temporal,Temporal Test,Stacking,specificity,Specificity,0.8350951374207188,0.13999999999999999,514,41
-Rolling Landmark,Test_Temporal,Temporal Test,Stacking,f1,F1,0.3472222222222222,0.13999999999999999,514,41

@@ -236,7 +236,6 @@ def save_paper_method_framework(out_path):
         ("LightGBM", "#bbf7d0", "#15803d"),
         ("MLP", "#f5d0fe", "#a21caf"),
         ("Cox PH", "#fef3c7", "#ca8a04"),
-        ("Stacking", "#e0f2fe", "#0284c7"),
     ]
     chip_x0, chip_y0, chip_w, chip_h = 0.55, 0.535, 0.075, 0.036
     for idx, (label, fc, ec) in enumerate(chips):

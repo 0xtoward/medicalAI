@@ -22,10 +22,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import RandomizedSearchCV, GroupKFold
 from sklearn.svm import SVC
 from sklearn.metrics import (roc_auc_score, average_precision_score,
-                             accuracy_score, balanced_accuracy_score,
                              f1_score, confusion_matrix, brier_score_loss)
 from sklearn.calibration import calibration_curve
-from sklearn.ensemble import StackingClassifier
 import scipy.integrate
 if not hasattr(scipy.integrate, 'trapz'):
     scipy.integrate.trapz = scipy.integrate.trapezoid
@@ -461,25 +459,13 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
         suffix = "[fixed config]" if best_params is None else str(best_params)
         print(f"    {name:<22s} CV PR-AUC={best_score:.3f}  {suffix}")
 
-    # Build Stacking from tuned base models
-    stacking_est = StackingClassifier(
-        estimators=[
-            ('lr', clone(tuned_models['Logistic Reg.'][0])),
-            ('rf', clone(tuned_models['Random Forest'][0])),
-        ],
-        final_estimator=LogisticRegression(max_iter=1000, random_state=S),
-        cv=3, n_jobs=1, passthrough=False
-    )
-    tuned_models["Stacking"] = (stacking_est, "#17becf", "-")
-    print(f"    {'Stacking':<22s} Built from tuned LR + RF")
-
     # ================= OOF threshold selection + refit =================
     print("\n  OOF threshold selection + evaluation...")
     results = {}
 
-    print(f"\n{'='*105}")
-    print(f"  {'Model':<22s} {'AUC':>6} {'PR-AUC':>8} {'CIdx':>6} {'Thr':>5} {'Acc':>6} {'BalAcc':>8} {'F1':>6}  {'TP':>4} {'FP':>5} {'FN':>4} {'TN':>5}")
-    print(f"{'='*105}")
+    print(f"\n{'='*98}")
+    print(f"  {'Model':<22s} {'AUC':>6} {'PR-AUC':>8} {'CIdx':>6} {'Thr':>5} {'Recall':>8} {'Spec':>7} {'F1':>6}  {'TP':>4} {'FP':>5} {'FN':>4} {'TN':>5}")
+    print(f"{'='*98}")
 
     for name, (model, color, ls) in tuned_models.items():
         oof_proba = np.zeros(len(y_tr))
@@ -501,26 +487,26 @@ def train_and_evaluate_hazard_strict(df_long_train, df_long_test):
 
         auc = roc_auc_score(y_te, proba)
         prauc = average_precision_score(y_te, proba)
-        acc = accuracy_score(y_te, pred_bin)
-        bacc = balanced_accuracy_score(y_te, pred_bin)
         f1 = f1_score(y_te, pred_bin, zero_division=0)
         cm = confusion_matrix(y_te, pred_bin)
         tn, fp, fn, tp = cm.ravel()
+        recall = tp / (tp + fn) if (tp + fn) else np.nan
+        specificity = tn / (tn + fp) if (tn + fp) else np.nan
 
         c_index = compute_recurrent_c_index_from_intervals(df_long_test, proba)
         results[name] = {
             'proba': proba, 'auc': auc, 'prauc': prauc,
             'c_index': c_index,
-            'acc': acc, 'bacc': bacc, 'f1': f1, 'threshold': best_thr,
+            'recall': recall, 'specificity': specificity, 'f1': f1, 'threshold': best_thr,
             'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
             'model': model, 'color': color, 'ls': ls,
             'oof_proba': oof_proba, 'train_fit_proba': train_fit_proba,
         }
 
         marker = " *" if auc == max(r['auc'] for r in results.values()) else "  "
-        print(f"{marker}{name:<22s} {auc:>5.3f} {prauc:>7.3f} {c_index:>5.3f} {best_thr:>4.2f} {acc:>5.3f} {bacc:>7.3f} {f1:>5.3f}  {tp:>4} {fp:>5} {fn:>4} {tn:>5}")
+        print(f"{marker}{name:<22s} {auc:>5.3f} {prauc:>7.3f} {c_index:>5.3f} {best_thr:>4.2f} {recall:>7.3f} {specificity:>7.3f} {f1:>5.3f}  {tp:>4} {fp:>5} {fn:>4} {tn:>5}")
 
-    print(f"{'='*105}")
+    print(f"{'='*98}")
     best_name = max(results, key=lambda k: results[k]['auc'])
     print(f"  Best AUC: {best_name} ({results[best_name]['auc']:.3f})")
     best_prauc_name = max(results, key=lambda k: results[k]['prauc'])

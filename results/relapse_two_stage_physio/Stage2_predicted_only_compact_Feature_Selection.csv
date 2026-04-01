@@ -1,0 +1,9 @@
+feature,coefficient,abs_coefficient,selected
+P_next_hyper,,,True
+P_next_hypo,,,True
+NextState_Entropy,,,True
+NextState_MaxProb,,,True
+Pred_Delta_FT4,,,True
+Pred_Delta_logTSH,,,True
+Pred_Std_FT4,,,True
+Pred_Std_logTSH,,,True
