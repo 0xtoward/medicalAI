@@ -1,0 +1,6 @@
+original_features=19
+selected_features=19
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=Direct_Logit, Physio_Main_Logit, Direct_x_Physio_Main, Interval_Name_12M->18M, Interval_Name_12M->18M_x_Direct_Logit, Interval_Name_12M->18M_x_Physio_Main_Logit, Interval_Name_18M->24M, Interval_Name_18M->24M_x_Direct_Logit, Interval_Name_18M->24M_x_Physio_Main_Logit, Interval_Name_1M->3M, Interval_Name_1M->3M_x_Direct_Logit, Interval_Name_1M->3M_x_Physio_Main_Logit, Interval_Name_3M->6M, Interval_Name_3M->6M_x_Direct_Logit, Interval_Name_3M->6M_x_Physio_Main_Logit, Interval_Name_6M->12M, Interval_Name_6M->12M_x_Direct_Logit, Interval_Name_6M->12M_x_Physio_Main_Logit, Physio_Rule_Logit
+note=direct=direct_windowed_core; sidecar=champion_calibrated; rule_sidecar=True; sidecar_calibration=shared slope + early/late intercepts; aux_rule_sidecar=yes

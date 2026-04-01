@@ -1,9 +1,9 @@
 Level,Metric,Value,CI_95
-Patient,AUC,0.745483288166215,"[0.654, 0.830]"
-Patient,PR_AUC,0.4412091205354178,"[0.307, 0.618]"
-Patient,Brier,0.15391278244893114,"[0.123, 0.183]"
-Patient,Recall,0.9444444444444444,"[0.867, 1.000]"
-Patient,Specificity,0.3983739837398374,"[0.310, 0.484]"
-Patient,Calibration_Intercept,0.10207120970386488,"[-0.505, 0.814]"
-Patient,Calibration_Slope,1.2926319345365873,"[0.799, 2.054]"
-Patient,Threshold,0.18000000000000005,
+Patient,AUC,0.7411924119241192,"[0.650, 0.825]"
+Patient,PR_AUC,0.42643673559713896,"[0.306, 0.598]"
+Patient,Brier,0.15520056760897508,"[0.124, 0.184]"
+Patient,Recall,0.6666666666666666,"[0.500, 0.826]"
+Patient,Specificity,0.6422764227642277,"[0.561, 0.726]"
+Patient,Calibration_Intercept,0.036099617797667946,"[-0.566, 0.762]"
+Patient,Calibration_Slope,1.1897970643893985,"[0.724, 1.884]"
+Patient,Threshold,0.26000000000000006,

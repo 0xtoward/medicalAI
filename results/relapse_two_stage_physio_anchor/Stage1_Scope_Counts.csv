@@ -1,0 +1,13 @@
+Split,Interval_Name,current_normal,current_nonhyper,next_hyper_from_normal,next_hyper_from_nonhyper
+Train,0M->1M,0,0,0,0
+Test,0M->1M,0,0,0,0
+Train,1M->3M,282,327,59,62
+Test,1M->3M,68,82,17,18
+Train,3M->6M,298,538,41,60
+Test,3M->6M,71,137,10,22
+Train,6M->12M,462,565,42,50
+Test,6M->12M,110,138,8,10
+Train,12M->18M,512,574,16,20
+Test,12M->18M,128,147,2,4
+Train,18M->24M,542,599,11,15
+Test,18M->24M,137,152,4,4

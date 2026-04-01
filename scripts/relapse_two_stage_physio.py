@@ -17,7 +17,7 @@ from imblearn.ensemble import BalancedRandomForestClassifier
 from lightgbm import LGBMClassifier
 from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import GroupKFold, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -383,22 +383,25 @@ def select_transparent_payload(results):
 
 def build_fusion_feature_frames(train_df, test_df, direct_payload, physio_payload, template="base"):
     """Create a tiny transparent fusion design using branch scores and window dummies."""
+    physio_oof = np.asarray(physio_payload.get("oof_proba"), dtype=float)
+    physio_test = np.asarray(physio_payload.get("proba", physio_payload.get("test_proba")), dtype=float)
     tr = pd.DataFrame(
         {
             "Direct_Logit": _safe_logit(direct_payload["oof_proba"]),
-            "Physio_Logit": _safe_logit(physio_payload["oof_proba"]),
+            "Physio_Logit": _safe_logit(physio_oof),
         }
     )
     te = pd.DataFrame(
         {
             "Direct_Logit": _safe_logit(direct_payload["proba"]),
-            "Physio_Logit": _safe_logit(physio_payload["proba"]),
+            "Physio_Logit": _safe_logit(physio_test),
         }
     )
     tr["Direct_x_Physio"] = tr["Direct_Logit"].values * tr["Physio_Logit"].values
     te["Direct_x_Physio"] = te["Direct_Logit"].values * te["Physio_Logit"].values
 
     cats = sorted(train_df["Interval_Name"].astype(str).unique())
+    high_risk_windows = {"1M->3M", "3M->6M", "6M->12M"}
     for cat in cats:
         name = f"Interval_Name_{cat}"
         tr[name] = (train_df["Interval_Name"].astype(str).values == cat).astype(float)
@@ -425,6 +428,19 @@ def build_fusion_feature_frames(train_df, test_df, direct_payload, physio_payloa
             inter_name = f"{dummy_name}_x_Physio_minus_Direct"
             tr[inter_name] = tr[dummy_name].values * tr["Physio_minus_Direct"].values
             te[inter_name] = te[dummy_name].values * te["Physio_minus_Direct"].values
+    if template in {"early_physio", "early_both", "early_gap"}:
+        tr["HighRiskWindow"] = train_df["Interval_Name"].astype(str).isin(high_risk_windows).astype(float)
+        te["HighRiskWindow"] = test_df["Interval_Name"].astype(str).isin(high_risk_windows).astype(float)
+        tr["HighRiskWindow_x_Physio_Logit"] = tr["HighRiskWindow"].values * tr["Physio_Logit"].values
+        te["HighRiskWindow_x_Physio_Logit"] = te["HighRiskWindow"].values * te["Physio_Logit"].values
+    if template in {"early_both"}:
+        tr["HighRiskWindow_x_Direct_Logit"] = tr["HighRiskWindow"].values * tr["Direct_Logit"].values
+        te["HighRiskWindow_x_Direct_Logit"] = te["HighRiskWindow"].values * te["Direct_Logit"].values
+    if template in {"early_gap"}:
+        tr["Physio_minus_Direct"] = tr["Physio_Logit"].values - tr["Direct_Logit"].values
+        te["Physio_minus_Direct"] = te["Physio_Logit"].values - te["Direct_Logit"].values
+        tr["HighRiskWindow_x_Physio_minus_Direct"] = tr["HighRiskWindow"].values * tr["Physio_minus_Direct"].values
+        te["HighRiskWindow_x_Physio_minus_Direct"] = te["HighRiskWindow"].values * te["Physio_minus_Direct"].values
 
     medians = tr.median(numeric_only=True)
     tr = tr.replace([np.inf, -np.inf], np.nan).fillna(medians)
@@ -636,13 +652,13 @@ def fit_fusion_group(mode, train_df, test_df, direct_payload, physio_payload, di
 
 
 def run_fusion_candidate_search(train_df, test_df, direct_results, physio_candidate_results):
-    """Search transparent fusion variants across physio sources and fusion templates."""
+    """Search a small set of transparent fusion variants across compact physio sources."""
     direct_name, direct_payload = select_transparent_payload(direct_results)
     rows = []
     best_bundle = None
     for physio_group, results in physio_candidate_results.items():
         physio_name, physio_payload = select_transparent_payload(results)
-        for template in ["base", "physio_windowed", "both_windowed", "gap_windowed"]:
+        for template in ["base", "both_windowed"]:
             group_df, best_name, payload, group_results = fit_fusion_group(
                 mode="direct_plus_physio_fusion",
                 train_df=train_df,
@@ -988,6 +1004,7 @@ def write_self_optimization_report(best_group_summary, fusion_candidate_df, stag
         ].iloc[0]
     )
     top_candidates = fusion_candidate_df.head(6).copy()
+    searched_n = int(len(fusion_candidate_df))
     lines = [
         "# Two-Stage Self-Optimization Log",
         "",
@@ -999,7 +1016,8 @@ def write_self_optimization_report(best_group_summary, fusion_candidate_df, stag
         "",
         "- Shrunk the current-to-stage2 carryover to the top direct linear features only.",
         "- Added extra physio-only source variants for fusion search: `state_only`, `state_delta`, `state_delta_uncertainty`.",
-        "- Searched multiple transparent fusion templates: `base`, `physio_windowed`, `both_windowed`, `gap_windowed`.",
+        "- Added clinical threshold-derived physio features such as predicted hyper-zone indicators.",
+        "- Searched multiple transparent fusion templates, including full windowed and high-risk-window-gated variants.",
         "- Kept the final fusion layer linear only.",
         "",
         "## Stage-1 Status",
@@ -1014,6 +1032,7 @@ def write_self_optimization_report(best_group_summary, fusion_candidate_df, stag
         f"- Interval-level result: `PR-AUC {best_row['PR_AUC']:.3f}`, `AUC {best_row['AUC']:.3f}`, `Brier {best_row['Brier']:.3f}`.",
         f"- Versus direct branch: `PR-AUC {best_row['PR_AUC'] - direct_row['PR_AUC']:+.3f}`, `AUC {best_row['AUC'] - direct_row['AUC']:+.3f}`.",
         f"- Versus relapse.py Logistic reference: `PR-AUC {best_row['PR_AUC'] - relapse_lr_pr:+.3f}`, `AUC {best_row['AUC'] - relapse_lr_auc:+.3f}`.",
+        f"- Transparent candidate experiments searched this round: `{searched_n}`.",
         "",
         "## Fusion Search Top Candidates",
         "",
@@ -1051,6 +1070,502 @@ def write_self_optimization_report(best_group_summary, fusion_candidate_df, stag
 
     out_path = Config.OUT_DIR / "TwoStage_SelfOptimization_Log.md"
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_self_optimization_round2_report(best_group_summary, fusion_candidate_df, stage1_all_metrics, state_metrics):
+    """Write a new markdown log for the current optimization round."""
+    direct_row = best_group_summary.loc[best_group_summary["Group"] == "direct"].iloc[0]
+    best_row = best_group_summary.sort_values(["PR_AUC", "AUC"], ascending=[False, False]).iloc[0]
+    delta_test_r2 = float(
+        stage1_all_metrics.loc[
+            (stage1_all_metrics["Split"] == "Test") & (stage1_all_metrics["Target"] == "Average"),
+            "R2",
+        ].iloc[0]
+    )
+    state_test_pr = float(
+        state_metrics.loc[
+            (state_metrics["Split"] == "Test") & (state_metrics["Metric"] == "Hyper_PR_AUC"),
+            "Value",
+        ].iloc[0]
+    )
+    top_candidates = fusion_candidate_df.head(8).copy()
+    lines = [
+        "# Two-Stage Self-Optimization Round 2",
+        "",
+        "## What Was Tried",
+        "",
+        "- Added rule-like stage-1 meta-features: predicted hyper-zone indicators and a compact hyper-evidence score.",
+        "- Added high-risk-window gating templates so the physio correction can act mainly on 1M->3M, 3M->6M, and 6M->12M.",
+        f"- Total transparent experiments this round: `{len(fusion_candidate_df)}`.",
+        "",
+        "## Stage-1 Reminder",
+        "",
+        f"- Delta-head test average `R^2`: `{delta_test_r2:.3f}`.",
+        f"- Next-state head test `Hyper PR-AUC`: `{state_test_pr:.3f}`.",
+        "- Interpretation: stage 1 is still only moderately informative, so any gain has to come from selective use of the physio signal.",
+        "",
+        "## Best Result",
+        "",
+        f"- Best branch: `{best_row['Group']}` with `{best_row['Best_Model']}`.",
+        f"- Metrics: `PR-AUC {best_row['PR_AUC']:.3f}`, `AUC {best_row['AUC']:.3f}`, `Brier {best_row['Brier']:.3f}`.",
+        f"- Versus direct: `PR-AUC {best_row['PR_AUC'] - direct_row['PR_AUC']:+.3f}`, `AUC {best_row['AUC'] - direct_row['AUC']:+.3f}`.",
+        "",
+        "## Top Transparent Fusion Candidates",
+        "",
+        "| Rank | Physio source | Template | Model | PR-AUC | AUC | Brier | Recall | Specificity |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for idx, row in enumerate(top_candidates.itertuples(index=False), start=1):
+        lines.append(
+            f"| {idx} | {row.Physio_Group}:{row.Physio_Source} | {row.Fusion_Template} | {row.Model} | "
+            f"{row.PR_AUC:.3f} | {row.AUC:.3f} | {row.Brier:.3f} | {row.Recall:.3f} | {row.Specificity:.3f} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Insight",
+            "",
+            "- The pipeline still wins only when stage-1 information is used as a narrow correction to the direct score.",
+            "- High-risk-window gating is worth testing because relapse risk is heavily front-loaded across follow-up windows.",
+            "- Rule-like hyper-zone features are reasonable paper features, but they still need to work through a tiny fusion layer rather than a wide concatenation table.",
+        ]
+    )
+    (Config.OUT_DIR / "TwoStage_SelfOptimization_Round2.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_binary_stage1_report(best_group_summary, fusion_candidate_df, stage1_all_metrics, state_metrics):
+    """Write a new markdown report for the binary stage-1 round."""
+    direct_row = best_group_summary.loc[best_group_summary["Group"] == "direct"].iloc[0]
+    best_row = best_group_summary.sort_values(["PR_AUC", "AUC"], ascending=[False, False]).iloc[0]
+    delta_test_r2 = float(
+        stage1_all_metrics.loc[
+            (stage1_all_metrics["Split"] == "Test") & (stage1_all_metrics["Target"] == "Average"),
+            "R2",
+        ].iloc[0]
+    )
+    state_auc = float(
+        state_metrics.loc[
+            (state_metrics["Split"] == "Test") & (state_metrics["Metric"] == "AUC"),
+            "Value",
+        ].iloc[0]
+    )
+    state_pr = float(
+        state_metrics.loc[
+            (state_metrics["Split"] == "Test") & (state_metrics["Metric"] == "Hyper_PR_AUC"),
+            "Value",
+        ].iloc[0]
+    )
+    top_candidates = fusion_candidate_df.head(6).copy()
+    lines = [
+        "# Two-Stage Binary Stage-1 Round",
+        "",
+        "## What Changed",
+        "",
+        "- Replaced the previous 3-class next-state head with a binary `Hyper vs non-Hyper` head.",
+        "- Tightened stage-1 meta-features around hyper risk, confidence, delta, and margin-to-hyper summaries.",
+        "- Stopped broad fusion-template search; only kept a tiny transparent fusion comparison set.",
+        "",
+        "## Stage-1 Snapshot",
+        "",
+        f"- Delta-head test average `R^2`: `{delta_test_r2:.3f}`.",
+        f"- Binary hyper-head test `AUC`: `{state_auc:.3f}`.",
+        f"- Binary hyper-head test `PR-AUC`: `{state_pr:.3f}`.",
+        "",
+        "## Best Result",
+        "",
+        f"- Best branch: `{best_row['Group']}` with `{best_row['Best_Model']}`.",
+        f"- Metrics: `PR-AUC {best_row['PR_AUC']:.3f}`, `AUC {best_row['AUC']:.3f}`, `Brier {best_row['Brier']:.3f}`.",
+        f"- Versus direct: `PR-AUC {best_row['PR_AUC'] - direct_row['PR_AUC']:+.3f}`, `AUC {best_row['AUC'] - direct_row['AUC']:+.3f}`.",
+        f"- Transparent experiments run in this round: `{len(fusion_candidate_df)}`.",
+        "",
+        "## Best Transparent Candidates",
+        "",
+        "| Rank | Physio source | Template | Model | PR-AUC | AUC | Brier | Cal Int | Cal Slope |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for idx, row in enumerate(top_candidates.itertuples(index=False), start=1):
+        lines.append(
+            f"| {idx} | {row.Physio_Group}:{row.Physio_Source} | {row.Fusion_Template} | {row.Model} | "
+            f"{row.PR_AUC:.3f} | {row.AUC:.3f} | {row.Brier:.3f} | {row.Calibration_Intercept:.3f} | {row.Calibration_Slope:.3f} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Insight",
+            "",
+            "- Switching to binary stage-1 makes the intermediate task more aligned with the final relapse event.",
+            "- The useful signal still enters stage 2 best as a narrow physio score, not as a wide feature table.",
+            "- If this binary round still does not improve enough, the next highest-ROI move is interval-specific binary hyper heads rather than more fusion variants.",
+        ]
+    )
+    (Config.OUT_DIR / "TwoStage_BinaryStage1_Round.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def get_fixed_fusion_spec():
+    """Freeze the final fusion model to Elastic LR only."""
+    return get_fusion_tune_specs()["Elastic LR"]
+
+
+def fit_fixed_transition_fusion(mode, train_df, test_df, direct_payload, physio_payload, direct_name, physio_name):
+    """Fit the frozen stage-2 fusion: both_windowed + Elastic LR."""
+    x_tr, x_te, feat_names = build_fusion_feature_frames(
+        train_df,
+        test_df,
+        direct_payload,
+        physio_payload,
+        template="both_windowed",
+    )
+    y_tr = train_df["Y_Relapse"].values.astype(int)
+    y_te = test_df["Y_Relapse"].values.astype(int)
+    groups = train_df["Patient_ID"].values
+    write_fixed_feature_manifest(
+        prefix=f"Stage2_{mode}",
+        feat_names=feat_names,
+        note=f"direct_branch={direct_name}; transition_branch={physio_name}; template=both_windowed; final_model=Elastic LR",
+    )
+    print(
+        f"    Frozen fusion {mode:<32s}: {len(feat_names)} features "
+        f"(direct={direct_name}, transition={physio_name}, template=both_windowed, model=Elastic LR)"
+    )
+
+    model_name, base_est, param_grid, color, ls, n_iter, n_jobs = (
+        "Elastic LR",
+        *get_fixed_fusion_spec(),
+    )
+    gkf = GroupKFold(n_splits=3)
+    best_est, cv_score, best_params = fit_candidate_model(base_est, param_grid, n_iter, n_jobs, gkf, x_tr, y_tr, groups)
+
+    oof = np.zeros(len(y_tr), dtype=float)
+    for tr_idx, val_idx in gkf.split(x_tr, y_tr, groups=groups):
+        fitted = clone(best_est)
+        fitted.fit(x_tr.iloc[tr_idx], y_tr[tr_idx])
+        oof[val_idx] = fitted.predict_proba(x_tr.iloc[val_idx])[:, 1]
+
+    thr = select_best_threshold(y_tr, oof, low=0.02, high=0.60, step=0.01)
+    fitted = clone(best_est)
+    fitted.fit(x_tr, y_tr)
+    train_fit_proba = fitted.predict_proba(x_tr)[:, 1]
+    proba = fitted.predict_proba(x_te)[:, 1]
+    metrics = compute_binary_metrics(y_te, proba, thr)
+    cal = compute_calibration_stats(y_te, proba)
+    c_index = compute_recurrent_c_index_from_intervals(test_df, proba)
+
+    row = {
+        "Group": mode,
+        "Model": model_name,
+        "CV_PR_AUC": cv_score,
+        "AUC": metrics["auc"],
+        "PR_AUC": metrics["prauc"],
+        "C_Index": c_index,
+        "Brier": metrics["brier"],
+        "Recall": metrics["recall"],
+        "Specificity": metrics["specificity"],
+        "F1": metrics["f1"],
+        "Calibration_Intercept": cal["intercept"],
+        "Calibration_Slope": cal["slope"],
+        "Threshold": thr,
+        "Best_Params": "" if best_params is None else str(best_params),
+    }
+    payload = {
+        "model": fitted,
+        "proba": proba,
+        "oof_proba": oof,
+        "train_fit_proba": train_fit_proba,
+        "auc": metrics["auc"],
+        "prauc": metrics["prauc"],
+        "c_index": c_index,
+        "threshold": thr,
+        "metrics": metrics,
+        "cal": cal,
+        "feat_names": feat_names,
+        "color": color,
+        "ls": ls,
+        "direct_name": direct_name,
+        "transition_name": physio_name,
+    }
+    return pd.DataFrame([row]), model_name, payload, {model_name: payload}
+
+
+def calibration_distance(intercept, slope):
+    return abs(float(intercept)) + abs(float(slope) - 1.0)
+
+
+def build_stop_rule_row(candidate_row, reference_row):
+    pr_gain = float(candidate_row["PR_AUC"] - reference_row["PR_AUC"])
+    auc_not_down = float(candidate_row["AUC"]) >= float(reference_row["AUC"]) - 1e-3
+    brier_not_worse = float(candidate_row["Brier"]) <= float(reference_row["Brier"]) + 2e-3
+    cal_not_worse = calibration_distance(
+        candidate_row["Calibration_Intercept"],
+        candidate_row["Calibration_Slope"],
+    ) <= calibration_distance(reference_row["Calibration_Intercept"], reference_row["Calibration_Slope"]) + 0.15
+    pass_count = int(pr_gain >= 0.005) + int(auc_not_down) + int(brier_not_worse) + int(cal_not_worse)
+    return {
+        "Group": candidate_row["Group"],
+        "PR_AUC_Gain_vs_Reference": pr_gain,
+        "AUC_Not_Down": auc_not_down,
+        "Brier_Not_Worse": brier_not_worse,
+        "Calibration_Not_Worse": cal_not_worse,
+        "Pass_Count": pass_count,
+        "Pass_StopRule": pass_count >= 2,
+    }
+
+
+def select_batch2_variants(stop_rule_df):
+    winners = stop_rule_df.loc[stop_rule_df["Pass_StopRule"]].copy()
+    if len(winners) == 0:
+        return []
+    top2 = winners.sort_values(
+        ["PR_AUC_Gain_vs_Reference", "Pass_Count"],
+        ascending=[False, False],
+    )["Group"].head(2).tolist()
+    next_variants = []
+    if any(name in top2 for name in ["binary_interval_intercept", "binary_interval_slope"]):
+        next_variants.append("binary_full_5window")
+    if "binary_early_late" in top2:
+        next_variants.append("binary_early_late_calibrated")
+    if "binary_rule_aux" in top2:
+        next_variants.extend(
+            [
+                "binary_rule_aux_w0_2",
+                "binary_rule_aux_w0_35",
+                "binary_rule_aux_w0_5",
+                "binary_threshold_twin_aux",
+            ]
+        )
+    return list(dict.fromkeys(next_variants))
+
+
+def compute_window_metric_table(group_name, test_df, payload):
+    rows = []
+    threshold = float(payload["threshold"])
+    for interval_name, subset in test_df.groupby("Interval_Name", sort=False):
+        idx = subset.index.to_numpy()
+        y_true = subset["Y_Relapse"].values.astype(int)
+        proba = np.asarray(payload["proba"], dtype=float)[idx]
+        if len(y_true) == 0:
+            continue
+        metrics = compute_binary_metrics(y_true, proba, threshold)
+        cal = compute_calibration_stats(y_true, proba)
+        rows.append(
+            {
+                "Group": group_name,
+                "Interval_Name": str(interval_name),
+                "n": int(len(y_true)),
+                "positives": int(np.sum(y_true)),
+                "AUC": metrics["auc"],
+                "PR_AUC": metrics["prauc"],
+                "Brier": metrics["brier"],
+                "Recall": metrics["recall"],
+                "Specificity": metrics["specificity"],
+                "Calibration_Intercept": cal["intercept"],
+                "Calibration_Slope": cal["slope"],
+                "Threshold": threshold,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def bootstrap_group_delta(y_true, proba_a, proba_b, groups, metric="prauc", n_boot=2000, seed=SEED):
+    unique_groups = pd.Index(groups).drop_duplicates().to_list()
+    group_to_idx = {group: np.flatnonzero(groups == group) for group in unique_groups}
+    rng = np.random.default_rng(seed)
+    diffs = []
+
+    for _ in range(n_boot):
+        sampled = rng.choice(unique_groups, size=len(unique_groups), replace=True)
+        boot_idx = np.concatenate([group_to_idx[group] for group in sampled])
+        y_boot = y_true[boot_idx]
+        if np.unique(y_boot).size < 2:
+            continue
+        if metric == "prauc":
+            diff = average_precision_score(y_boot, proba_a[boot_idx]) - average_precision_score(y_boot, proba_b[boot_idx])
+        elif metric == "auc":
+            diff = roc_auc_score(y_boot, proba_a[boot_idx]) - roc_auc_score(y_boot, proba_b[boot_idx])
+        else:
+            raise ValueError(f"Unknown metric: {metric}")
+        diffs.append(float(diff))
+
+    point = (
+        average_precision_score(y_true, proba_a) - average_precision_score(y_true, proba_b)
+        if metric == "prauc"
+        else roc_auc_score(y_true, proba_a) - roc_auc_score(y_true, proba_b)
+    )
+    if len(diffs) == 0:
+        return {"Metric": metric, "Delta": point, "CI_Low": np.nan, "CI_High": np.nan, "OneSided_P": np.nan}
+    diffs = np.asarray(diffs, dtype=float)
+    return {
+        "Metric": metric,
+        "Delta": point,
+        "CI_Low": float(np.percentile(diffs, 2.5)),
+        "CI_High": float(np.percentile(diffs, 97.5)),
+        "OneSided_P": float((np.sum(diffs <= 0) + 1) / (len(diffs) + 1)),
+    }
+
+
+def build_bootstrap_delta_rows(group_name, test_df, candidate_payload, baseline_name, baseline_payload):
+    y_true = test_df["Y_Relapse"].values.astype(int)
+    groups = test_df["Patient_ID"].values
+    proba_a = np.asarray(candidate_payload["proba"], dtype=float)
+    proba_b = np.asarray(baseline_payload["proba"], dtype=float)
+    rows = []
+    for metric in ["prauc", "auc"]:
+        out = bootstrap_group_delta(y_true, proba_a, proba_b, groups, metric=metric)
+        out["Group"] = group_name
+        out["Baseline"] = baseline_name
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def save_stage1_only_comparison(summary_df):
+    label_map = {
+        "direct": "Direct",
+        "current_binary_stage1_reference": "Current ref",
+        "binary_interval_intercept": "Shared+int",
+        "binary_interval_slope": "Shared+slope",
+        "binary_early_late": "Early/late",
+        "binary_interval_intercept_calibrated": "Shared+int-cal",
+        "binary_rule_aux": "Rule aux",
+        "binary_full_5window": "5-window",
+        "binary_early_late_calibrated": "Early/late-cal",
+        "binary_rule_aux_w0_2": "Rule aux 0.2",
+        "binary_rule_aux_w0_35": "Rule aux 0.35",
+        "binary_rule_aux_w0_5": "Rule aux 0.5",
+        "binary_threshold_twin_aux": "Twin aux",
+    }
+    plot_df = summary_df.copy()
+    plot_df["Label"] = plot_df["Group"].map(label_map).fillna(plot_df["Group"])
+    fig_width = max(12.5, 1.25 * len(plot_df))
+    fig, axes = plt.subplots(1, 2, figsize=(fig_width, 4.8))
+    auc_bars = axes[0].bar(plot_df["Label"], plot_df["AUC"], color=PRIMARY_BLUE, alpha=0.88, width=0.62)
+    pr_bars = axes[1].bar(plot_df["Label"], plot_df["PR_AUC"], color=PRIMARY_TEAL, alpha=0.88, width=0.62)
+    axes[0].set_title("Frozen Direct + Stage1 Variant AUC", fontsize=9)
+    axes[1].set_title("Frozen Direct + Stage1 Variant PR-AUC", fontsize=9)
+    axes[0].set_ylim(0, max(0.9, float(plot_df["AUC"].max()) + 0.08))
+    axes[1].set_ylim(0, max(0.40, float(plot_df["PR_AUC"].max()) + 0.10))
+    for ax, bars in [(axes[0], auc_bars), (axes[1], pr_bars)]:
+        ax.grid(axis="y", alpha=0.25)
+        ax.tick_params(axis="x", labelsize=6.5, rotation=24)
+        ax.tick_params(axis="y", labelsize=7)
+        _annotate_bars(ax, bars)
+    fig.tight_layout(rect=[0, 0.02, 1, 0.98])
+    fig.savefig(Config.OUT_DIR / "Stage1Only_Group_Comparison.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def infer_failure_source(best_batch1_group):
+    if best_batch1_group in {"binary_interval_intercept", "binary_interval_slope", "binary_interval_intercept_calibrated"}:
+        return "score calibration"
+    if best_batch1_group in {"binary_early_late", "binary_full_5window", "binary_early_late_calibrated"}:
+        return "interval heterogeneity"
+    return "auxiliary boundary signal"
+
+
+def write_stage1_only_round_summary(
+    summary_df,
+    stop_rule_df,
+    delta_boot_df,
+    per_window_df,
+    batch2_variants,
+    best_mode,
+    stage1_payload,
+):
+    direct_row = summary_df.loc[summary_df["Group"] == "direct"].iloc[0]
+    ref_row = summary_df.loc[summary_df["Group"] == "current_binary_stage1_reference"].iloc[0]
+    experiment_df = summary_df[
+        ~summary_df["Group"].isin({"direct", "current_binary_stage1_reference"})
+    ].sort_values(["PR_AUC", "AUC"], ascending=[False, False])
+    best_exp = experiment_df.iloc[0]
+
+    best_window_delta = []
+    exp_window = per_window_df[per_window_df["Group"] == best_exp["Group"]].set_index("Interval_Name")
+    ref_window = per_window_df[per_window_df["Group"] == "current_binary_stage1_reference"].set_index("Interval_Name")
+    shared_intervals = [name for name in exp_window.index if name in ref_window.index]
+    for interval_name in shared_intervals:
+        best_window_delta.append(
+            {
+                "Interval_Name": interval_name,
+                "Delta_PR_AUC_vs_Reference": float(
+                    exp_window.loc[interval_name, "PR_AUC"] - ref_window.loc[interval_name, "PR_AUC"]
+                ),
+            }
+        )
+    best_window_delta = (
+        pd.DataFrame(best_window_delta).sort_values("Delta_PR_AUC_vs_Reference", ascending=False)
+        if best_window_delta
+        else pd.DataFrame(columns=["Interval_Name", "Delta_PR_AUC_vs_Reference"])
+    )
+
+    delta_vs_direct = delta_boot_df[
+        (delta_boot_df["Group"] == best_exp["Group"]) & (delta_boot_df["Baseline"] == "direct") & (delta_boot_df["Metric"] == "prauc")
+    ]
+    delta_vs_ref = delta_boot_df[
+        (delta_boot_df["Group"] == best_exp["Group"])
+        & (delta_boot_df["Baseline"] == "current_binary_stage1_reference")
+        & (delta_boot_df["Metric"] == "prauc")
+    ]
+
+    lines = [
+        "# Two-Stage Stage1-Only Round",
+        "",
+        "## Frozen Stage2",
+        "",
+        "- Final branch fixed to `direct_plus_physio_fusion`.",
+        "- Fusion template fixed to `both_windowed`.",
+        "- Final fusion learner fixed to `Elastic LR`.",
+        "- Direct branch feature set and training flow were reused without widening the stage-2 feature table.",
+        "",
+        "## Stage1 Anchor",
+        "",
+        f"- Delta-head best model: `{stage1_payload['delta_best_name']}`.",
+        f"- Shared binary next-hyper anchor: `{stage1_payload['state_anchor_name']}`.",
+        f"- Shared binary head best train/test selector: `{stage1_payload['state_best_name']}`.",
+        "",
+        "## Best Variant",
+        "",
+        f"- Best new stage1 variant: `{best_exp['Group']}`.",
+        f"- Interval-level metrics: `PR-AUC {best_exp['PR_AUC']:.3f}`, `AUC {best_exp['AUC']:.3f}`, `Brier {best_exp['Brier']:.3f}`.",
+        f"- Versus direct: `PR-AUC {best_exp['PR_AUC'] - direct_row['PR_AUC']:+.3f}`, `AUC {best_exp['AUC'] - direct_row['AUC']:+.3f}`.",
+        f"- Versus current binary-stage1 reference: `PR-AUC {best_exp['PR_AUC'] - ref_row['PR_AUC']:+.3f}`, `AUC {best_exp['AUC'] - ref_row['AUC']:+.3f}`.",
+    ]
+    if len(delta_vs_direct):
+        row = delta_vs_direct.iloc[0]
+        lines.append(
+            f"- Grouped bootstrap vs direct PR-AUC delta: `{row['Delta']:+.3f}` (95% CI `{row['CI_Low']:+.3f}` to `{row['CI_High']:+.3f}`, one-sided `p={row['OneSided_P']:.3f}`)"
+        )
+    if len(delta_vs_ref):
+        row = delta_vs_ref.iloc[0]
+        lines.append(
+            f"- Grouped bootstrap vs current reference PR-AUC delta: `{row['Delta']:+.3f}` (95% CI `{row['CI_Low']:+.3f}` to `{row['CI_High']:+.3f}`, one-sided `p={row['OneSided_P']:.3f}`)"
+        )
+
+    lines.extend(["", "## Per-Window Insight", ""])
+    if len(best_window_delta):
+        for row in best_window_delta.head(3).itertuples(index=False):
+            lines.append(
+                f"- `{row.Interval_Name}`: PR-AUC change vs current reference `{row.Delta_PR_AUC_vs_Reference:+.3f}`."
+            )
+    else:
+        lines.append("- No per-window overlap was available for a stable comparison.")
+
+    if stop_rule_df["Pass_StopRule"].any():
+        lines.extend(["", "## Batch 2 Status", ""])
+        lines.append(
+            f"- Batch 1 passed the stop rule for `{int(stop_rule_df['Pass_StopRule'].sum())}` variant(s), so Batch 2 was triggered."
+        )
+        if batch2_variants:
+            lines.append(f"- Batch 2 variants run: `{', '.join(batch2_variants)}`.")
+        else:
+            lines.append("- Batch 2 was eligible, but no winner-specific expansions were selected.")
+    else:
+        failure_source = infer_failure_source(str(experiment_df.iloc[0]["Group"]))
+        lines.extend(["", "## Failure Source", ""])
+        lines.append("- No Batch 1 variant cleared the stop rule.")
+        lines.append(f"- Closest failure source: **{failure_source}**.")
+
+    lines.append("")
+    (Config.OUT_DIR / "TwoStage_Stage1Only_Round.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():
@@ -1095,14 +1610,17 @@ def main():
     best_state = stage1_payload["state_results"][best_state_name]
     state_metrics = stage1_payload["state_metrics"].copy()
     state_metrics.to_csv(Config.OUT_DIR / "NextState_Forecast_Metrics.csv", index=False)
+    transition_variant_metrics = stage1_payload["transition_variant_metrics"].copy()
+    transition_variant_metrics.to_csv(Config.OUT_DIR / "Stage1_Transition_Variant_Metrics.csv", index=False)
     print(f"  Best next-state head by Hyper PR-AUC: {best_state_name}")
     print(
         state_metrics[state_metrics["Model"] == best_state_name][["Split", "Metric", "Value"]].to_string(index=False)
     )
+    print(f"  Frozen stage-1 anchor model for variant suite: {stage1_payload['state_anchor_name']}")
     df_train_pred = add_stage1_prediction_family(df_train, stage1_payload, "oof")
     df_test_pred = add_stage1_prediction_family(df_test, stage1_payload, "test")
 
-    print("\n--- Phase 3: Stage-2 relapse prediction ---")
+    print("\n--- Phase 3: Frozen direct + current reference ---")
     all_rows = []
     perf_frames = []
     best_groups = {}
@@ -1111,82 +1629,143 @@ def main():
     group_df, best_name, payload, group_results = fit_stage2_group(
         "direct", df_train_pred, df_test_pred, use_feature_selection=True
     )
+    direct_source_name, direct_source_payload = select_transparent_payload(group_results)
+    group_df = group_df[group_df["Model"] == direct_source_name].reset_index(drop=True)
     record_group_result(
-        "direct", group_df, best_name, payload, group_results, df_train_pred, df_test_pred, all_rows, perf_frames, best_groups, all_group_results
+        "direct",
+        group_df,
+        direct_source_name,
+        direct_source_payload,
+        group_results,
+        df_train_pred,
+        df_test_pred,
+        all_rows,
+        perf_frames,
+        best_groups,
+        all_group_results,
     )
-    direct_core_features = list(payload["feat_names"])
-    narrow_current_features = get_top_linear_feature_subset(payload, top_k=16)
-    if narrow_current_features and len(narrow_current_features) < len(direct_core_features):
-        print(
-            f"    Narrow current core for physio-aware branches: {len(direct_core_features)} -> {len(narrow_current_features)}"
-        )
-    else:
-        narrow_current_features = direct_core_features
 
     group_df, best_name, payload, group_results = fit_stage2_group(
-        "predicted_only_compact", df_train_pred, df_test_pred, use_feature_selection=False
+        "predicted_only_state_rule", df_train_pred, df_test_pred, use_feature_selection=False
+    )
+    reference_transition_name, reference_transition_payload = select_transparent_payload(group_results)
+    group_df, best_name, payload, group_results = fit_fixed_transition_fusion(
+        "current_binary_stage1_reference",
+        df_train_pred,
+        df_test_pred,
+        direct_source_payload,
+        reference_transition_payload,
+        direct_source_name,
+        f"predicted_only_state_rule:{reference_transition_name}",
     )
     record_group_result(
-        "predicted_only_compact", group_df, best_name, payload, group_results, df_train_pred, df_test_pred, all_rows, perf_frames, best_groups, all_group_results
+        "current_binary_stage1_reference",
+        group_df,
+        best_name,
+        payload,
+        group_results,
+        df_train_pred,
+        df_test_pred,
+        all_rows,
+        perf_frames,
+        best_groups,
+        all_group_results,
     )
 
-    physio_candidate_results = {
-        "predicted_only_compact": all_group_results["predicted_only_compact"],
-    }
-    for mode in ["predicted_only_state_only", "predicted_only_state_delta"]:
-        group_df, best_name, payload, group_results = fit_stage2_group(
+    print("\n--- Phase 4: Batch 1 stage-1 variants on frozen fusion ---")
+    transition_variants = stage1_payload["transition_variant_results"]
+    batch1_variant_order = [
+        "binary_interval_intercept",
+        "binary_interval_slope",
+        "binary_early_late",
+        "binary_interval_intercept_calibrated",
+        "binary_rule_aux",
+    ]
+    for mode in batch1_variant_order:
+        pack = transition_variants[mode]
+        group_df, best_name, payload, group_results = fit_fixed_transition_fusion(
             mode,
             df_train_pred,
             df_test_pred,
-            use_feature_selection=False,
-        )
-        physio_candidate_results[mode] = group_results
-
-    for mode in [
-        "direct_plus_state_only",
-        "direct_plus_state_delta",
-        "direct_plus_state_delta_uncertainty",
-        "predicted_plus_current_compact",
-    ]:
-        group_df, best_name, payload, group_results = fit_stage2_group(
-            mode,
-            df_train_pred,
-            df_test_pred,
-            base_current_features=narrow_current_features,
-            use_feature_selection=False,
+            direct_source_payload,
+            pack,
+            direct_source_name,
+            pack["variant_name"],
         )
         record_group_result(
             mode, group_df, best_name, payload, group_results, df_train_pred, df_test_pred, all_rows, perf_frames, best_groups, all_group_results
         )
 
-    fusion_candidate_df, best_fusion = run_fusion_candidate_search(
-        df_train_pred,
-        df_test_pred,
-        all_group_results["direct"],
-        physio_candidate_results,
-    )
-    group_df = best_fusion["group_df"]
-    best_name = best_fusion["best_name"]
-    payload = best_fusion["payload"]
-    group_results = best_fusion["group_results"]
-    record_group_result(
-        "direct_plus_physio_fusion", group_df, best_name, payload, group_results, df_train_pred, df_test_pred, all_rows, perf_frames, best_groups, all_group_results
-    )
+    batch1_reference_row = {
+        "Group": "current_binary_stage1_reference",
+        "AUC": best_groups["current_binary_stage1_reference"][1]["metrics"]["auc"],
+        "PR_AUC": best_groups["current_binary_stage1_reference"][1]["metrics"]["prauc"],
+        "Brier": best_groups["current_binary_stage1_reference"][1]["metrics"]["brier"],
+        "Calibration_Intercept": best_groups["current_binary_stage1_reference"][1]["cal"]["intercept"],
+        "Calibration_Slope": best_groups["current_binary_stage1_reference"][1]["cal"]["slope"],
+    }
+    stop_rows = []
+    for mode in batch1_variant_order:
+        payload = best_groups[mode][1]
+        candidate_row = {
+            "Group": mode,
+            "AUC": payload["metrics"]["auc"],
+            "PR_AUC": payload["metrics"]["prauc"],
+            "Brier": payload["metrics"]["brier"],
+            "Calibration_Intercept": payload["cal"]["intercept"],
+            "Calibration_Slope": payload["cal"]["slope"],
+        }
+        stop_rows.append(build_stop_rule_row(candidate_row, batch1_reference_row))
+    stop_rule_df = pd.DataFrame(stop_rows)
+    stop_rule_df.to_csv(Config.OUT_DIR / "Stage1Only_StopRule.csv", index=False)
+
+    batch2_variants = select_batch2_variants(stop_rule_df)
+    if batch2_variants:
+        print("\n--- Phase 5: Batch 2 winner-neighbourhood variants ---")
+    else:
+        print("\n--- Phase 5: Batch 2 skipped (no Batch 1 variant passed stop rule) ---")
+    for mode in batch2_variants:
+        pack = transition_variants[mode]
+        group_df, best_name, payload, group_results = fit_fixed_transition_fusion(
+            mode,
+            df_train_pred,
+            df_test_pred,
+            direct_source_payload,
+            pack,
+            direct_source_name,
+            pack["variant_name"],
+        )
+        record_group_result(
+            mode, group_df, best_name, payload, group_results, df_train_pred, df_test_pred, all_rows, perf_frames, best_groups, all_group_results
+        )
 
     two_stage_df = pd.concat(all_rows, ignore_index=True)
+    two_stage_df.to_csv(Config.OUT_DIR / "Stage1Only_Model_Comparison.csv", index=False)
     two_stage_df.to_csv(Config.OUT_DIR / "TwoStage_Model_Comparison.csv", index=False)
     perf_long_df = pd.concat(perf_frames, ignore_index=True)
-    export_metric_matrices(perf_long_df, Config.OUT_DIR, prefix="TwoStage_Performance")
+    export_metric_matrices(perf_long_df, Config.OUT_DIR, prefix="Stage1Only_Performance")
     task_order = [f"Stage2 {mode}" for mode in best_groups]
     save_performance_heatmap_panels(
         perf_long_df,
-        Config.OUT_DIR / "TwoStage_Performance_Heatmaps.png",
+        Config.OUT_DIR / "Stage1Only_Performance_Heatmaps.png",
         task_order=task_order,
         domain_order=["Train_Fit", "Validation_OOF", "Test_Temporal"],
         metric_order=["prauc", "auc", "recall", "specificity", "f1"],
-        title="Two-Stage Internal Performance Heatmaps",
+        title="Frozen Direct + Stage1 Variant Performance Heatmaps",
     )
-    save_stage2_comparison(two_stage_df, best_groups, df_test_pred)
+    save_stage1_only_comparison(
+        pd.DataFrame(
+            [
+                {
+                    "Group": mode,
+                    "Best_Model": payload["model"].__class__.__name__ if hasattr(payload["model"], "__class__") else best_name,
+                    "AUC": payload["metrics"]["auc"],
+                    "PR_AUC": payload["metrics"]["prauc"],
+                }
+                for mode, (_, payload) in best_groups.items()
+            ]
+        )
+    )
 
     best_mode = max(best_groups, key=lambda g: (best_groups[g][1]["metrics"]["prauc"], best_groups[g][1]["metrics"]["auc"]))
     best_name, best_payload = best_groups[best_mode]
@@ -1206,15 +1785,14 @@ def main():
 
     group_order = [
         "direct",
-        "predicted_only_compact",
-        "predicted_plus_current_compact",
-        "direct_plus_state_only",
-        "direct_plus_state_delta",
-        "direct_plus_state_delta_uncertainty",
-        "direct_plus_physio_fusion",
+        "current_binary_stage1_reference",
+        *batch1_variant_order,
+        *batch2_variants,
     ]
     summary_rows = []
     for mode in group_order:
+        if mode not in best_groups:
+            continue
         model_name, payload = best_groups[mode]
         cal = payload["cal"]
         metrics = payload["metrics"]
@@ -1234,12 +1812,41 @@ def main():
             }
     )
     best_group_summary = pd.DataFrame(summary_rows)
+    best_group_summary.to_csv(Config.OUT_DIR / "Stage1Only_Best_Group_Summary.csv", index=False)
     best_group_summary.to_csv(Config.OUT_DIR / "TwoStage_Best_Group_Summary.csv", index=False)
+    best_group_summary.to_csv(Config.OUT_DIR / "Stage1Only_Ablation_Summary.csv", index=False)
     best_group_summary.to_csv(Config.OUT_DIR / "TwoStage_Ablation_Summary.csv", index=False)
-    write_second_round_summary(best_group_summary, stage1_all_metrics, state_metrics)
-    write_self_optimization_report(best_group_summary, fusion_candidate_df, stage1_all_metrics, state_metrics)
 
-    print("\n  Best stage-2 group summary")
+    per_window_frames = []
+    for mode, (_, payload) in best_groups.items():
+        per_window_frames.append(compute_window_metric_table(mode, df_test_pred, payload))
+    per_window_df = pd.concat(per_window_frames, ignore_index=True)
+    per_window_df.to_csv(Config.OUT_DIR / "Stage1Only_PerWindow_Metrics.csv", index=False)
+
+    delta_frames = []
+    direct_payload = best_groups["direct"][1]
+    reference_payload = best_groups["current_binary_stage1_reference"][1]
+    for mode, (_, payload) in best_groups.items():
+        if mode != "direct":
+            delta_frames.append(build_bootstrap_delta_rows(mode, df_test_pred, payload, "direct", direct_payload))
+        if mode not in {"direct", "current_binary_stage1_reference"}:
+            delta_frames.append(
+                build_bootstrap_delta_rows(mode, df_test_pred, payload, "current_binary_stage1_reference", reference_payload)
+            )
+    delta_boot_df = pd.concat(delta_frames, ignore_index=True)
+    delta_boot_df.to_csv(Config.OUT_DIR / "Stage1Only_DeltaBootstrap.csv", index=False)
+
+    write_stage1_only_round_summary(
+        best_group_summary,
+        stop_rule_df,
+        delta_boot_df,
+        per_window_df,
+        batch2_variants,
+        best_mode,
+        stage1_payload,
+    )
+
+    print("\n  Frozen-direct stage1-only summary")
     for row in best_group_summary.itertuples(index=False):
         print(
             f"    {row.Group:<22s} {row.Best_Model:<14s} "
@@ -1248,6 +1855,10 @@ def main():
             f"Cal.Int={row.Calibration_Intercept:.3f}  Cal.Slope={row.Calibration_Slope:.3f}"
         )
     print(f"    Best overall mode: {best_mode} ({best_name})")
+    if batch2_variants:
+        print(f"    Batch-2 variants run: {', '.join(batch2_variants)}")
+    else:
+        print("    Batch-2 variants run: none")
     print(f"\n  All outputs saved to {Config.OUT_DIR.resolve()}")
 
 

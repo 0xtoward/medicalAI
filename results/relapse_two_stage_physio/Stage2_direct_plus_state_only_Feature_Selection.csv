@@ -16,6 +16,6 @@ FT3_Prev,,,True
 logTSH_Baseline,,,True
 Uptake24h,,,True
 P_next_hyper,,,True
-P_next_hypo,,,True
 NextState_Entropy,,,True
 NextState_MaxProb,,,True
+Pred_HyperEvidence,,,True

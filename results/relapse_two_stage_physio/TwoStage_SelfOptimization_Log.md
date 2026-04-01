@@ -8,32 +8,34 @@
 
 - Shrunk the current-to-stage2 carryover to the top direct linear features only.
 - Added extra physio-only source variants for fusion search: `state_only`, `state_delta`, `state_delta_uncertainty`.
-- Searched multiple transparent fusion templates: `base`, `physio_windowed`, `both_windowed`, `gap_windowed`.
+- Added clinical threshold-derived physio features such as predicted hyper-zone indicators.
+- Searched multiple transparent fusion templates, including full windowed and high-risk-window-gated variants.
 - Kept the final fusion layer linear only.
 
 ## Stage-1 Status
 
 - Delta-head test average `R^2`: `0.072`.
-- Next-state head test `Hyper PR-AUC`: `0.285`.
+- Next-state head test `Hyper PR-AUC`: `0.323`.
 - Interpretation: stage 1 is still modest, so gains must come from a better handoff rather than raw stage-1 strength.
 
 ## Best Current Result
 
 - Best branch in this run: `direct_plus_physio_fusion` with `Elastic LR`.
-- Interval-level result: `PR-AUC 0.347`, `AUC 0.849`, `Brier 0.063`.
-- Versus direct branch: `PR-AUC +0.017`, `AUC +0.007`.
-- Versus relapse.py Logistic reference: `PR-AUC +0.014`, `AUC +0.007`.
+- Interval-level result: `PR-AUC 0.350`, `AUC 0.851`, `Brier 0.063`.
+- Versus direct branch: `PR-AUC +0.020`, `AUC +0.009`.
+- Versus relapse.py Logistic reference: `PR-AUC +0.016`, `AUC +0.010`.
+- Transparent candidate experiments searched this round: `6`.
 
 ## Fusion Search Top Candidates
 
 | Rank | Physio source | Template | Model | PR-AUC | AUC | Brier | Cal Int | Cal Slope |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | predicted_only_state_only:Logistic Reg. | both_windowed | Elastic LR | 0.347 | 0.849 | 0.063 | 0.794 | 1.511 |
-| 2 | predicted_only_compact:Elastic LR | both_windowed | Elastic LR | 0.346 | 0.846 | 0.063 | 0.017 | 1.188 |
-| 3 | predicted_only_state_delta:Logistic Reg. | both_windowed | Logistic Reg. | 0.345 | 0.847 | 0.063 | 0.898 | 1.548 |
-| 4 | predicted_only_state_only:Logistic Reg. | gap_windowed | Elastic LR | 0.336 | 0.848 | 0.063 | 0.723 | 1.474 |
-| 5 | predicted_only_compact:Elastic LR | gap_windowed | Elastic LR | 0.336 | 0.844 | 0.064 | -0.048 | 1.155 |
-| 6 | predicted_only_state_delta:Logistic Reg. | gap_windowed | Elastic LR | 0.333 | 0.845 | 0.063 | 0.780 | 1.494 |
+| 1 | predicted_only_state_rule:Logistic Reg. | both_windowed | Elastic LR | 0.350 | 0.851 | 0.063 | 0.745 | 1.468 |
+| 2 | predicted_only_state_only:Elastic LR | both_windowed | Elastic LR | 0.346 | 0.848 | 0.063 | 0.993 | 1.600 |
+| 3 | predicted_only_state_rule:Logistic Reg. | base | Logistic Reg. | 0.332 | 0.843 | 0.068 | 4.938 | 3.293 |
+| 4 | predicted_only_state_delta:Elastic LR | both_windowed | Logistic Reg. | 0.331 | 0.842 | 0.068 | 4.590 | 3.107 |
+| 5 | predicted_only_state_only:Elastic LR | base | Logistic Reg. | 0.331 | 0.842 | 0.068 | 4.592 | 3.107 |
+| 6 | predicted_only_state_delta:Elastic LR | base | Logistic Reg. | 0.331 | 0.842 | 0.068 | 4.592 | 3.107 |
 
 ## Current Insight
 

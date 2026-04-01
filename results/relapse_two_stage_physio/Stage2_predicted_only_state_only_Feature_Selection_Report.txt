@@ -2,5 +2,5 @@ original_features=4
 selected_features=4
 best_c=NA_fixed
 cv_pr_auc=NA_fixed
-selected_feature_names=P_next_hyper, P_next_hypo, NextState_Entropy, NextState_MaxProb
+selected_feature_names=P_next_hyper, NextState_Entropy, NextState_MaxProb, Pred_HyperEvidence
 note=fixed compact handoff

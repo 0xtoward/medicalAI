@@ -1,0 +1,19 @@
+feature,coef,abs_coef,family,pretty_feature,odds_ratio,is_active,direction,family_order
+Direct_x_Physio_Main,-0.630376860460642,0.630376860460642,Other,Direct x Physio Main,0.5323911260310425,True,Risk down,6
+Direct_Logit,0.494645206169936,0.494645206169936,Other,Direct Logit,1.6399163036432474,True,Risk up,6
+Interval_Name_1M->3M_x_Direct_Logit,-0.07115600651365236,0.07115600651365236,Other,Interval Name 1M->3M x Direct Logit,0.9313165893395866,True,Risk down,6
+Interval_Name_12M->18M,0.0,0.0,Other,Interval Name 12M->18M,1.0,False,Zeroed,6
+Interval_Name_12M->18M_x_Direct_Logit,0.0,0.0,Other,Interval Name 12M->18M x Direct Logit,1.0,False,Zeroed,6
+Interval_Name_12M->18M_x_Physio_Main_Logit,0.0,0.0,Other,Interval Name 12M->18M x Physio Main Logit,1.0,False,Zeroed,6
+Interval_Name_18M->24M,0.0,0.0,Other,Interval Name 18M->24M,1.0,False,Zeroed,6
+Interval_Name_18M->24M_x_Direct_Logit,0.0,0.0,Other,Interval Name 18M->24M x Direct Logit,1.0,False,Zeroed,6
+Interval_Name_18M->24M_x_Physio_Main_Logit,0.0,0.0,Other,Interval Name 18M->24M x Physio Main Logit,1.0,False,Zeroed,6
+Interval_Name_1M->3M,0.0,0.0,Other,Interval Name 1M->3M,1.0,False,Zeroed,6
+Interval_Name_1M->3M_x_Physio_Main_Logit,0.0,0.0,Other,Interval Name 1M->3M x Physio Main Logit,1.0,False,Zeroed,6
+Interval_Name_3M->6M,0.0,0.0,Other,Interval Name 3M->6M,1.0,False,Zeroed,6
+Interval_Name_3M->6M_x_Direct_Logit,0.0,0.0,Other,Interval Name 3M->6M x Direct Logit,1.0,False,Zeroed,6
+Interval_Name_3M->6M_x_Physio_Main_Logit,0.0,0.0,Other,Interval Name 3M->6M x Physio Main Logit,1.0,False,Zeroed,6
+Interval_Name_6M->12M,0.0,0.0,Other,Interval Name 6M->12M,1.0,False,Zeroed,6
+Interval_Name_6M->12M_x_Direct_Logit,0.0,0.0,Other,Interval Name 6M->12M x Direct Logit,1.0,False,Zeroed,6
+Interval_Name_6M->12M_x_Physio_Main_Logit,0.0,0.0,Other,Interval Name 6M->12M x Physio Main Logit,1.0,False,Zeroed,6
+Physio_Main_Logit,0.0,0.0,Other,Physio Main Logit,1.0,False,Zeroed,6

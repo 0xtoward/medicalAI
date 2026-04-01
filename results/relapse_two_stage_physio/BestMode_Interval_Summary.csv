@@ -1,9 +1,9 @@
 Level,Metric,Value,CI_95
-Interval,AUC,0.8488114268034858,"[0.798, 0.899]"
-Interval,PR_AUC,0.3474193377478844,"[0.225, 0.497]"
-Interval,Brier,0.06293787293550851,"[0.045, 0.080]"
-Interval,Recall,0.7073170731707317,"[0.581, 0.852]"
-Interval,Specificity,0.8160676532769556,"[0.784, 0.846]"
-Interval,Calibration_Intercept,0.7942380918584107,"[0.040, 1.629]"
-Interval,Calibration_Slope,1.5107323446248482,"[1.150, 2.097]"
+Interval,AUC,0.8509255917083485,"[0.801, 0.900]"
+Interval,PR_AUC,0.3501424998328119,"[0.228, 0.496]"
+Interval,Brier,0.06303513094206555,"[0.045, 0.081]"
+Interval,Recall,0.6829268292682927,"[0.545, 0.829]"
+Interval,Specificity,0.8224101479915433,"[0.793, 0.852]"
+Interval,Calibration_Intercept,0.7447738628045296,"[0.031, 1.552]"
+Interval,Calibration_Slope,1.4680530253572284,"[1.130, 1.992]"
 Interval,Threshold,0.14999999999999997,

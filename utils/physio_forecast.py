@@ -30,10 +30,10 @@ CURRENT_BY_TARGET = {
 CURRENT_LAB_COLS = [CURRENT_BY_TARGET[target] for target in TARGET_COLS]
 STATE_TO_CODE = {name: idx for idx, name in enumerate(STATE_NAMES)}
 CODE_TO_STATE = {idx: name for name, idx in STATE_TO_CODE.items()}
+BINARY_STATE_NAMES = ["NonHyper", "Hyper"]
 STAGE1_META_COLS = [
     "P_next_hyper",
-    "P_next_normal",
-    "P_next_hypo",
+    "P_next_nonhyper",
     "NextState_Entropy",
     "NextState_MaxProb",
     "Pred_Delta_FT3",
@@ -44,23 +44,34 @@ STAGE1_META_COLS = [
     "Pred_Std_logTSH",
     "Pred_FT4_Margin_To_Hyper",
     "Pred_logTSH_Margin_To_Hyper",
+    "Pred_FT4_HyperZone",
+    "Pred_logTSH_HyperZone",
+    "Pred_AnyHyperZone",
+    "Pred_BothHyperZone",
+    "Pred_HyperEvidence",
 ]
 META_FEATURE_PRIORITY = [
     "P_next_hyper",
-    "P_next_hypo",
     "NextState_Entropy",
     "NextState_MaxProb",
+    "Pred_HyperEvidence",
     "Pred_Delta_FT4",
     "Pred_Delta_logTSH",
-    "Pred_Std_FT4",
-    "Pred_Std_logTSH",
     "Pred_FT4_Margin_To_Hyper",
     "Pred_logTSH_Margin_To_Hyper",
 ]
 META_VARIANTS = {
     "state_only": META_FEATURE_PRIORITY[:4],
     "state_delta": META_FEATURE_PRIORITY[:6],
-    "state_delta_uncertainty": META_FEATURE_PRIORITY[:8],
+    "state_delta_uncertainty": META_FEATURE_PRIORITY[:8] + ["Pred_Std_FT4", "Pred_Std_logTSH"],
+    "state_rule": [
+        "P_next_hyper",
+        "NextState_MaxProb",
+        "Pred_FT4_Margin_To_Hyper",
+        "Pred_logTSH_Margin_To_Hyper",
+        "Pred_AnyHyperZone",
+        "Pred_HyperEvidence",
+    ],
 }
 
 HISTORY_FEATURE_COLS = [
@@ -116,6 +127,19 @@ def _state_entropy(proba):
     proba = np.clip(np.asarray(proba, dtype=float), 1e-8, 1.0)
     ent = -np.sum(proba * np.log(proba), axis=1)
     return ent / np.log(proba.shape[1])
+
+
+def _binary_state_targets(df):
+    return (df["Next_State"].astype(str).values == "Hyper").astype(int)
+
+
+def _binary_proba_2col(proba):
+    arr = np.asarray(proba, dtype=float)
+    if arr.ndim == 1:
+        arr = np.column_stack([1.0 - arr, arr])
+    if arr.shape[1] == 1:
+        arr = np.column_stack([1.0 - arr[:, 0], arr[:, 0]])
+    return np.clip(arr, 1e-8, 1 - 1e-8)
 
 
 def _build_delta_targets(df):
@@ -333,16 +357,15 @@ def get_stage1_models():
 
 
 def get_next_state_models():
-    """Candidate next-state classifiers."""
+    """Candidate binary Hyper-vs-nonHyper classifiers."""
     return {
-        "Multinomial LR": Pipeline(
+        "Binary LR": Pipeline(
             [
                 ("scaler", StandardScaler()),
                 (
                     "clf",
                     LogisticRegression(
                         max_iter=4000,
-                        multi_class="multinomial",
                         class_weight="balanced",
                         random_state=SEED,
                     ),
@@ -350,8 +373,7 @@ def get_next_state_models():
             ]
         ),
         "LightGBM": LGBMClassifier(
-            objective="multiclass",
-            num_class=len(STATE_NAMES),
+            objective="binary",
             n_estimators=220,
             learning_rate=0.05,
             num_leaves=31,
@@ -395,26 +417,496 @@ def evaluate_physio_predictions(y_true, y_pred, split_name, model_name):
 
 
 def evaluate_next_state_predictions(y_true, proba, split_name, model_name):
-    """Summarize next-state classification quality."""
+    """Summarize Hyper-vs-nonHyper state classification quality."""
     y_true = np.asarray(y_true, dtype=int)
-    proba = np.clip(np.asarray(proba, dtype=float), 1e-8, 1 - 1e-8)
+    proba = _binary_proba_2col(proba)
+    p_hyper = proba[:, 1]
     try:
-        macro_auc = roc_auc_score(y_true, proba, multi_class="ovr", average="macro", labels=list(range(len(STATE_NAMES))))
+        auc = roc_auc_score(y_true, p_hyper)
     except Exception:
-        macro_auc = np.nan
-    hyper_pr_auc = average_precision_score((y_true == STATE_TO_CODE["Hyper"]).astype(int), proba[:, STATE_TO_CODE["Hyper"]])
+        auc = np.nan
+    hyper_pr_auc = average_precision_score(y_true, p_hyper)
     rows = [
-        {"Split": split_name, "Model": model_name, "Metric": "Macro_AUC", "Value": macro_auc},
+        {"Split": split_name, "Model": model_name, "Metric": "AUC", "Value": auc},
         {"Split": split_name, "Model": model_name, "Metric": "Hyper_PR_AUC", "Value": hyper_pr_auc},
-        {"Split": split_name, "Model": model_name, "Metric": "LogLoss", "Value": log_loss(y_true, proba, labels=list(range(len(STATE_NAMES))))},
+        {"Split": split_name, "Model": model_name, "Metric": "LogLoss", "Value": log_loss(y_true, proba, labels=[0, 1])},
         {
             "Split": split_name,
             "Model": model_name,
             "Metric": "Mean_MaxProb",
-            "Value": float(np.mean(np.max(proba, axis=1))),
+            "Value": float(np.mean(np.maximum(p_hyper, 1.0 - p_hyper))),
         },
+        {"Split": split_name, "Model": model_name, "Metric": "Mean_P_Hyper", "Value": float(np.mean(p_hyper))},
     ]
     return pd.DataFrame(rows)
+
+
+EARLY_INTERVAL_NAMES = {"1M->3M", "3M->6M", "6M->12M"}
+
+
+def _sigmoid(x):
+    x = np.asarray(x, dtype=float)
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
+
+
+def _safe_logit_1d(proba):
+    p = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def _calibration_model():
+    return LogisticRegression(C=1e6, solver="lbfgs", max_iter=2000)
+
+
+def _predict_binary_from_fitted(fitted, X_pred):
+    if isinstance(fitted, dict) and fitted.get("type") == "constant":
+        return np.full(len(X_pred), float(fitted["p"]), dtype=float)
+    return _binary_proba_2col(fitted.predict_proba(X_pred))[:, 1]
+
+
+def _fit_predict_binary(base_model, X_fit, y_fit, X_pred):
+    y_fit = np.asarray(y_fit, dtype=int)
+    prevalence = float(np.clip(np.mean(y_fit), 1e-6, 1 - 1e-6))
+    if len(np.unique(y_fit)) < 2:
+        return {"type": "constant", "p": prevalence}, np.full(len(X_pred), prevalence, dtype=float)
+    try:
+        model = clone(base_model)
+        model.fit(X_fit, y_fit)
+        return model, _binary_proba_2col(model.predict_proba(X_pred))[:, 1]
+    except Exception:
+        return {"type": "constant", "p": prevalence}, np.full(len(X_pred), prevalence, dtype=float)
+
+
+def _run_binary_head_oof(base_model, X_train, y_train, X_test, groups):
+    y_train = np.asarray(y_train, dtype=int)
+    groups = np.asarray(groups)
+    n_splits = min(3, len(pd.Index(groups).drop_duplicates()))
+    if n_splits < 2:
+        fitted, test_proba = _fit_predict_binary(base_model, X_train, y_train, X_test)
+        train_fit = _predict_binary_from_fitted(fitted, X_train)
+        return {
+            "model": fitted,
+            "train_fit_proba": train_fit,
+            "oof_proba": train_fit.copy(),
+            "test_proba": test_proba,
+            "raw_logit_oof": _safe_logit_1d(train_fit),
+            "raw_logit_test": _safe_logit_1d(test_proba),
+            "calibrated_oof_proba": train_fit.copy(),
+            "calibrated_test_proba": test_proba.copy(),
+        }
+
+    gkf = GroupKFold(n_splits=n_splits)
+    oof = np.zeros(len(y_train), dtype=float)
+    for tr_idx, val_idx in gkf.split(X_train, y_train, groups=groups):
+        _, fold_proba = _fit_predict_binary(base_model, X_train.iloc[tr_idx], y_train[tr_idx], X_train.iloc[val_idx])
+        oof[val_idx] = fold_proba
+
+    fitted, _ = _fit_predict_binary(base_model, X_train, y_train, X_train)
+    train_fit = _predict_binary_from_fitted(fitted, X_train)
+    test_proba = _predict_binary_from_fitted(fitted, X_test)
+    return {
+        "model": fitted,
+        "train_fit_proba": train_fit,
+        "oof_proba": oof,
+        "test_proba": test_proba,
+        "raw_logit_oof": _safe_logit_1d(oof),
+        "raw_logit_test": _safe_logit_1d(test_proba),
+        "calibrated_oof_proba": oof.copy(),
+        "calibrated_test_proba": test_proba.copy(),
+    }
+
+
+def _route_phase_labels(intervals):
+    intervals = pd.Series(intervals).astype(str)
+    return np.where(intervals.isin(EARLY_INTERVAL_NAMES), "Early", "Late")
+
+
+def _build_score_design(train_df, test_df, train_logit, test_logit, mode="interval_intercept"):
+    tr = pd.DataFrame({"Stage1_Logit": np.asarray(train_logit, dtype=float)})
+    te = pd.DataFrame({"Stage1_Logit": np.asarray(test_logit, dtype=float)})
+
+    if mode.startswith("phase_"):
+        train_labels = _route_phase_labels(train_df["Interval_Name"].values)
+        test_labels = _route_phase_labels(test_df["Interval_Name"].values)
+        prefix = "Phase"
+    else:
+        train_labels = train_df["Interval_Name"].astype(str).values
+        test_labels = test_df["Interval_Name"].astype(str).values
+        prefix = "Interval"
+
+    dummy_cols = []
+    for label in sorted(pd.Index(train_labels).drop_duplicates()):
+        name = f"{prefix}_{label}"
+        tr[name] = (train_labels == label).astype(float)
+        te[name] = (test_labels == label).astype(float)
+        dummy_cols.append(name)
+
+    if mode in {"interval_slope", "phase_slope"}:
+        for dummy in dummy_cols:
+            inter_name = f"{dummy}_x_Stage1_Logit"
+            tr[inter_name] = tr[dummy].values * tr["Stage1_Logit"].values
+            te[inter_name] = te[dummy].values * te["Stage1_Logit"].values
+
+    keep_cols = [col for col in tr.columns if tr[col].nunique(dropna=False) > 1]
+    return tr[keep_cols], te[keep_cols]
+
+
+def _run_score_correction(train_design, y_train, test_design, groups):
+    y_train = np.asarray(y_train, dtype=int)
+    groups = np.asarray(groups)
+    prevalence = float(np.clip(np.mean(y_train), 1e-6, 1 - 1e-6))
+    n_splits = min(3, len(pd.Index(groups).drop_duplicates()))
+    if n_splits < 2:
+        if len(np.unique(y_train)) < 2:
+            const = np.full(len(train_design), prevalence, dtype=float)
+            return {"type": "constant", "p": prevalence}, const.copy(), const, np.full(len(test_design), prevalence, dtype=float)
+        model = _calibration_model()
+        try:
+            model.fit(train_design, y_train)
+            train_fit = model.predict_proba(train_design)[:, 1]
+            test_proba = model.predict_proba(test_design)[:, 1]
+            return model, train_fit.copy(), train_fit, test_proba
+        except Exception:
+            const = np.full(len(train_design), prevalence, dtype=float)
+            return {"type": "constant", "p": prevalence}, const.copy(), const, np.full(len(test_design), prevalence, dtype=float)
+
+    gkf = GroupKFold(n_splits=n_splits)
+    oof = np.zeros(len(y_train), dtype=float)
+    for tr_idx, val_idx in gkf.split(train_design, y_train, groups=groups):
+        if len(np.unique(y_train[tr_idx])) < 2:
+            oof[val_idx] = float(np.clip(np.mean(y_train[tr_idx]), 1e-6, 1 - 1e-6))
+            continue
+        model = _calibration_model()
+        try:
+            model.fit(train_design.iloc[tr_idx], y_train[tr_idx])
+            oof[val_idx] = model.predict_proba(train_design.iloc[val_idx])[:, 1]
+        except Exception:
+            oof[val_idx] = float(np.clip(np.mean(y_train[tr_idx]), 1e-6, 1 - 1e-6))
+
+    if len(np.unique(y_train)) < 2:
+        const = np.full(len(train_design), prevalence, dtype=float)
+        return {"type": "constant", "p": prevalence}, const.copy(), oof, np.full(len(test_design), prevalence, dtype=float)
+    fitted = _calibration_model()
+    try:
+        fitted.fit(train_design, y_train)
+        train_fit = fitted.predict_proba(train_design)[:, 1]
+        test_proba = fitted.predict_proba(test_design)[:, 1]
+        return fitted, train_fit, oof, test_proba
+    except Exception:
+        const = np.full(len(train_design), prevalence, dtype=float)
+        return {"type": "constant", "p": prevalence}, const.copy(), oof, np.full(len(test_design), prevalence, dtype=float)
+
+
+def _run_partitioned_binary_head(base_model, X_train, y_train, X_test, groups, train_partitions, test_partitions, fallback_pack):
+    train_partitions = np.asarray(train_partitions)
+    test_partitions = np.asarray(test_partitions)
+    y_train = np.asarray(y_train, dtype=int)
+    groups = np.asarray(groups)
+
+    train_fit = np.asarray(fallback_pack["train_fit_proba"], dtype=float).copy()
+    oof = np.asarray(fallback_pack["oof_proba"], dtype=float).copy()
+    test_proba = np.asarray(fallback_pack["test_proba"], dtype=float).copy()
+    models = {"fallback": fallback_pack.get("model")}
+
+    for part in sorted(pd.Index(train_partitions).drop_duplicates()):
+        fit_mask = train_partitions == part
+        pred_mask = test_partitions == part
+        if int(np.sum(fit_mask)) < 24:
+            continue
+        if len(pd.Index(groups[fit_mask]).drop_duplicates()) < 2:
+            continue
+        if len(np.unique(y_train[fit_mask])) < 2:
+            continue
+        sub_pack = _run_binary_head_oof(
+            base_model,
+            X_train.iloc[fit_mask],
+            y_train[fit_mask],
+            X_test.iloc[pred_mask],
+            groups[fit_mask],
+        )
+        train_fit[fit_mask] = np.asarray(sub_pack["train_fit_proba"], dtype=float)
+        oof[fit_mask] = np.asarray(sub_pack["oof_proba"], dtype=float)
+        test_proba[pred_mask] = np.asarray(sub_pack["test_proba"], dtype=float)
+        models[str(part)] = sub_pack["model"]
+
+    return {
+        "model": models,
+        "train_fit_proba": train_fit,
+        "oof_proba": oof,
+        "test_proba": test_proba,
+        "raw_logit_oof": _safe_logit_1d(oof),
+        "raw_logit_test": _safe_logit_1d(test_proba),
+        "calibrated_oof_proba": oof.copy(),
+        "calibrated_test_proba": test_proba.copy(),
+    }
+
+
+def _build_rule_targets(df, refs):
+    ft4_high = (_compute_margin(df["FT4_Next"].values.astype(float), refs["FT4"]) > 0).astype(int)
+    tsh_suppressed = (_compute_margin(df["logTSH_Next"].values.astype(float), refs["logTSH"]) > 0).astype(int)
+    any_hyper_rule = np.maximum(ft4_high, tsh_suppressed)
+    return {
+        "Any_hyper_rule_next": any_hyper_rule,
+        "FT4_high_next": ft4_high,
+        "TSH_suppressed_next": tsh_suppressed,
+    }
+
+
+def _combine_binary_packs(main_pack, aux_packs, aux_weights, tag="combined"):
+    main_weight = 1.0 - float(np.sum(aux_weights))
+    aux_weights = [float(w) for w in aux_weights]
+    oof_logit = main_weight * _safe_logit_1d(main_pack["oof_proba"])
+    test_logit = main_weight * _safe_logit_1d(main_pack["test_proba"])
+    train_fit_logit = main_weight * _safe_logit_1d(main_pack["train_fit_proba"])
+
+    for weight, aux_pack in zip(aux_weights, aux_packs):
+        oof_logit += weight * _safe_logit_1d(aux_pack["oof_proba"])
+        test_logit += weight * _safe_logit_1d(aux_pack["test_proba"])
+        train_fit_logit += weight * _safe_logit_1d(aux_pack["train_fit_proba"])
+
+    oof = _sigmoid(oof_logit)
+    test_proba = _sigmoid(test_logit)
+    train_fit = _sigmoid(train_fit_logit)
+    return {
+        "model": {
+            "type": tag,
+            "main_model": main_pack.get("model"),
+            "aux_models": [pack.get("model") for pack in aux_packs],
+            "aux_weights": aux_weights,
+        },
+        "train_fit_proba": train_fit,
+        "oof_proba": oof,
+        "test_proba": test_proba,
+        "raw_logit_oof": oof_logit,
+        "raw_logit_test": test_logit,
+        "calibrated_oof_proba": oof.copy(),
+        "calibrated_test_proba": test_proba.copy(),
+    }
+
+
+def _pack_transition_variant(name, model_name, pack, y_train, y_test, notes=""):
+    return {
+        **pack,
+        "variant_name": name,
+        "base_model_name": model_name,
+        "notes": notes,
+        "metrics": pd.concat(
+            [
+                evaluate_next_state_predictions(y_train, pack["oof_proba"], "Train_OOF", name),
+                evaluate_next_state_predictions(y_test, pack["test_proba"], "Test", name),
+            ],
+            ignore_index=True,
+        ),
+    }
+
+
+def _select_state_anchor_model(state_metrics):
+    score_df = (
+        state_metrics[state_metrics["Split"] == "Train_OOF"]
+        .pivot_table(index="Model", columns="Metric", values="Value")
+        .reset_index()
+    )
+    score_df = score_df[score_df["Model"] != "EnsembleMean"].copy()
+    if len(score_df) == 0:
+        return list(get_next_state_models().keys())[0]
+    score_df = score_df.sort_values(["Hyper_PR_AUC", "AUC"], ascending=[False, False])
+    return str(score_df.iloc[0]["Model"])
+
+
+def _run_transition_variant_suite(
+    X_train,
+    train_df,
+    X_test,
+    test_df,
+    groups,
+    train_intervals,
+    test_intervals,
+    state_anchor_name,
+    state_results,
+    hyper_margin_reference,
+):
+    y_train = _binary_state_targets(train_df)
+    y_test = _binary_state_targets(test_df)
+    refs = hyper_margin_reference
+    base_model = get_next_state_models()[state_anchor_name]
+    baseline_state = state_results[state_anchor_name]
+    baseline_pack = {
+        "model": baseline_state["model"],
+        "train_fit_proba": np.asarray(baseline_state["train_fit_proba"], dtype=float),
+        "oof_proba": np.asarray(_binary_proba_2col(baseline_state["oof_proba"])[:, 1], dtype=float),
+        "test_proba": np.asarray(_binary_proba_2col(baseline_state["test_proba"])[:, 1], dtype=float),
+        "raw_logit_oof": _safe_logit_1d(_binary_proba_2col(baseline_state["oof_proba"])[:, 1]),
+        "raw_logit_test": _safe_logit_1d(_binary_proba_2col(baseline_state["test_proba"])[:, 1]),
+        "calibrated_oof_proba": np.asarray(_binary_proba_2col(baseline_state["oof_proba"])[:, 1], dtype=float),
+        "calibrated_test_proba": np.asarray(_binary_proba_2col(baseline_state["test_proba"])[:, 1], dtype=float),
+    }
+
+    results = {
+        "binary_interval_intercept": _pack_transition_variant(
+            "binary_interval_intercept",
+            state_anchor_name,
+            baseline_pack,
+            y_train,
+            y_test,
+            notes="shared binary head with interval intercepts from the pooled stage-1 frame",
+        )
+    }
+
+    slope_tr, slope_te = _build_score_design(
+        train_df,
+        test_df,
+        baseline_pack["raw_logit_oof"],
+        baseline_pack["raw_logit_test"],
+        mode="interval_slope",
+    )
+    slope_model, slope_train_fit, slope_oof, slope_test = _run_score_correction(slope_tr, y_train, slope_te, groups)
+    results["binary_interval_slope"] = _pack_transition_variant(
+        "binary_interval_slope",
+        state_anchor_name,
+        {
+            "model": slope_model,
+            "train_fit_proba": slope_train_fit,
+            "oof_proba": slope_oof,
+            "test_proba": slope_test,
+            "raw_logit_oof": baseline_pack["raw_logit_oof"],
+            "raw_logit_test": baseline_pack["raw_logit_test"],
+            "calibrated_oof_proba": slope_oof,
+            "calibrated_test_proba": slope_test,
+        },
+        y_train,
+        y_test,
+        notes="interval-specific score slope correction on the shared binary head",
+    )
+
+    cal_tr, cal_te = _build_score_design(
+        train_df,
+        test_df,
+        baseline_pack["raw_logit_oof"],
+        baseline_pack["raw_logit_test"],
+        mode="interval_intercept",
+    )
+    cal_model, cal_train_fit, cal_oof, cal_test = _run_score_correction(cal_tr, y_train, cal_te, groups)
+    results["binary_interval_intercept_calibrated"] = _pack_transition_variant(
+        "binary_interval_intercept_calibrated",
+        state_anchor_name,
+        {
+            "model": cal_model,
+            "train_fit_proba": cal_train_fit,
+            "oof_proba": cal_oof,
+            "test_proba": cal_test,
+            "raw_logit_oof": baseline_pack["raw_logit_oof"],
+            "raw_logit_test": baseline_pack["raw_logit_test"],
+            "calibrated_oof_proba": cal_oof,
+            "calibrated_test_proba": cal_test,
+        },
+        y_train,
+        y_test,
+        notes="shared-slope interval-specific intercept calibration on the shared binary head",
+    )
+
+    phase_train = _route_phase_labels(train_intervals)
+    phase_test = _route_phase_labels(test_intervals)
+    early_late_pack = _run_partitioned_binary_head(
+        base_model,
+        X_train,
+        y_train,
+        X_test,
+        groups,
+        phase_train,
+        phase_test,
+        baseline_pack,
+    )
+    results["binary_early_late"] = _pack_transition_variant(
+        "binary_early_late",
+        state_anchor_name,
+        early_late_pack,
+        y_train,
+        y_test,
+        notes="two routed binary heads for early and late follow-up windows",
+    )
+
+    rule_targets = _build_rule_targets(train_df, refs)
+    rule_pack = _run_binary_head_oof(base_model, X_train, rule_targets["Any_hyper_rule_next"], X_test, groups)
+    combined_rule_pack = _combine_binary_packs(baseline_pack, [rule_pack], [0.35], tag="rule_aux")
+    results["binary_rule_aux"] = _pack_transition_variant(
+        "binary_rule_aux",
+        state_anchor_name,
+        combined_rule_pack,
+        y_train,
+        y_test,
+        notes="main hyper head plus Any_hyper_rule_next auxiliary score, weight=0.35",
+    )
+
+    full_window_pack = _run_partitioned_binary_head(
+        base_model,
+        X_train,
+        y_train,
+        X_test,
+        groups,
+        np.asarray(train_intervals),
+        np.asarray(test_intervals),
+        baseline_pack,
+    )
+    results["binary_full_5window"] = _pack_transition_variant(
+        "binary_full_5window",
+        state_anchor_name,
+        full_window_pack,
+        y_train,
+        y_test,
+        notes="five routed binary heads, one per follow-up window with shared fallback",
+    )
+
+    phase_cal_tr, phase_cal_te = _build_score_design(
+        train_df,
+        test_df,
+        early_late_pack["raw_logit_oof"],
+        early_late_pack["raw_logit_test"],
+        mode="phase_intercept",
+    )
+    phase_cal_model, phase_cal_train_fit, phase_cal_oof, phase_cal_test = _run_score_correction(
+        phase_cal_tr, y_train, phase_cal_te, groups
+    )
+    results["binary_early_late_calibrated"] = _pack_transition_variant(
+        "binary_early_late_calibrated",
+        state_anchor_name,
+        {
+            "model": phase_cal_model,
+            "train_fit_proba": phase_cal_train_fit,
+            "oof_proba": phase_cal_oof,
+            "test_proba": phase_cal_test,
+            "raw_logit_oof": early_late_pack["raw_logit_oof"],
+            "raw_logit_test": early_late_pack["raw_logit_test"],
+            "calibrated_oof_proba": phase_cal_oof,
+            "calibrated_test_proba": phase_cal_test,
+        },
+        y_train,
+        y_test,
+        notes="early/late routed heads plus phase-specific intercept calibration",
+    )
+
+    for weight in [0.2, 0.35, 0.5]:
+        results[f"binary_rule_aux_w{str(weight).replace('.', '_')}"] = _pack_transition_variant(
+            f"binary_rule_aux_w{str(weight).replace('.', '_')}",
+            state_anchor_name,
+            _combine_binary_packs(baseline_pack, [rule_pack], [weight], tag="rule_aux_weight_sweep"),
+            y_train,
+            y_test,
+            notes=f"main hyper head plus Any_hyper_rule_next auxiliary score, weight={weight:.2f}",
+        )
+
+    ft4_pack = _run_binary_head_oof(base_model, X_train, rule_targets["FT4_high_next"], X_test, groups)
+    tsh_pack = _run_binary_head_oof(base_model, X_train, rule_targets["TSH_suppressed_next"], X_test, groups)
+    results["binary_threshold_twin_aux"] = _pack_transition_variant(
+        "binary_threshold_twin_aux",
+        state_anchor_name,
+        _combine_binary_packs(baseline_pack, [ft4_pack, tsh_pack], [0.175, 0.175], tag="threshold_twin_aux"),
+        y_train,
+        y_test,
+        notes="main hyper head plus FT4_high_next and TSH_suppressed_next auxiliary scores",
+    )
+
+    metrics_df = pd.concat([payload["metrics"] for payload in results.values()], ignore_index=True)
+    return results, metrics_df
 
 
 def _fit_stage1_model(
@@ -525,26 +1017,28 @@ def _run_delta_oof_forecast(X_train, train_df, X_test, test_df, groups, train_in
 
 
 def _run_next_state_oof_forecast(X_train, train_df, X_test, test_df, groups):
-    """Train next-state classifiers with grouped OOF probabilities."""
-    y_state_train = train_df["Next_State"].map(STATE_TO_CODE).values.astype(int)
-    y_state_test = test_df["Next_State"].map(STATE_TO_CODE).values.astype(int)
+    """Train binary Hyper-vs-nonHyper classifiers with grouped OOF probabilities."""
+    y_state_train = _binary_state_targets(train_df)
+    y_state_test = _binary_state_targets(test_df)
     n_splits = min(3, len(pd.Index(groups).drop_duplicates()))
     gkf = GroupKFold(n_splits=n_splits)
     metric_frames = []
     results = {}
 
     for name, base_model in get_next_state_models().items():
-        oof_proba = np.zeros((len(y_state_train), len(STATE_NAMES)), dtype=float)
+        oof_proba = np.zeros((len(y_state_train), 2), dtype=float)
         for tr_idx, val_idx in gkf.split(X_train, y_state_train, groups=groups):
             model = clone(base_model)
             model.fit(X_train.iloc[tr_idx], y_state_train[tr_idx])
-            oof_proba[val_idx] = model.predict_proba(X_train.iloc[val_idx])
+            oof_proba[val_idx] = _binary_proba_2col(model.predict_proba(X_train.iloc[val_idx]))
         fitted = clone(base_model)
         fitted.fit(X_train, y_state_train)
-        test_proba = fitted.predict_proba(X_test)
+        train_fit_proba = _binary_proba_2col(fitted.predict_proba(X_train))
+        test_proba = _binary_proba_2col(fitted.predict_proba(X_test))
         metric_frames.append(evaluate_next_state_predictions(y_state_train, oof_proba, "Train_OOF", name))
         results[name] = {
             "model": fitted,
+            "train_fit_proba": train_fit_proba[:, 1],
             "oof_proba": oof_proba,
             "test_proba": test_proba,
         }
@@ -555,6 +1049,10 @@ def _run_next_state_oof_forecast(X_train, train_df, X_test, test_df, groups):
         test_stack = np.stack([results[name]["test_proba"] for name in base_names], axis=0)
         results["EnsembleMean"] = {
             "model": {"members": base_names, "type": "mean_ensemble"},
+            "train_fit_proba": np.mean(
+                np.stack([_binary_proba_2col(results[name]["train_fit_proba"]) for name in base_names], axis=0),
+                axis=0,
+            )[:, 1],
             "oof_proba": np.mean(oof_stack, axis=0),
             "test_proba": np.mean(test_stack, axis=0),
         }
@@ -562,7 +1060,7 @@ def _run_next_state_oof_forecast(X_train, train_df, X_test, test_df, groups):
 
     metrics_df = pd.concat(metric_frames, ignore_index=True)
     score_df = metrics_df.pivot_table(index="Model", columns="Metric", values="Value")
-    best_name = score_df.sort_values(["Hyper_PR_AUC", "Macro_AUC"], ascending=[False, False]).index[0]
+    best_name = score_df.sort_values(["Hyper_PR_AUC", "AUC"], ascending=[False, False]).index[0]
     test_metrics = evaluate_next_state_predictions(y_state_test, results[best_name]["test_proba"], "Test", best_name)
     return best_name, results, pd.concat([metrics_df, test_metrics], ignore_index=True)
 
@@ -577,14 +1075,30 @@ def run_stage1_oof_forecast(X_train, train_df, X_test, test_df, groups, train_in
     state_best_name, state_results, state_metrics = _run_next_state_oof_forecast(
         X_train, train_df, X_test, test_df, groups
     )
+    state_anchor_name = _select_state_anchor_model(state_metrics)
+    transition_variant_results, transition_variant_metrics = _run_transition_variant_suite(
+        X_train,
+        train_df,
+        X_test,
+        test_df,
+        groups,
+        train_intervals,
+        test_intervals,
+        state_anchor_name,
+        state_results,
+        _fit_empirical_hyper_margin_reference(train_df),
+    )
     return {
         "delta_best_name": delta_best_name,
         "delta_results": delta_results,
         "delta_metrics": delta_metrics,
         "state_best_name": state_best_name,
+        "state_anchor_name": state_anchor_name,
         "state_results": state_results,
         "state_metrics": state_metrics,
         "hyper_margin_reference": _fit_empirical_hyper_margin_reference(train_df),
+        "transition_variant_results": transition_variant_results,
+        "transition_variant_metrics": transition_variant_metrics,
     }
 
 
@@ -614,7 +1128,8 @@ def add_stage1_prediction_family(df, stage1_payload, split_key):
     for model_name in sorted(stage1_payload["state_results"]):
         payload = stage1_payload["state_results"][model_name]
         arr = np.asarray(payload.get(state_key), dtype=float)
-        if arr.ndim == 2 and arr.shape[1] == len(STATE_NAMES):
+        arr = _binary_proba_2col(arr)
+        if arr.ndim == 2 and arr.shape[1] == 2:
             state_arrays.append(arr)
 
     if not delta_arrays or not state_arrays:
@@ -626,9 +1141,8 @@ def add_stage1_prediction_family(df, stage1_payload, split_key):
     std_delta = np.std(delta_stack, axis=0)
     mean_state = np.mean(state_stack, axis=0)
 
-    out["P_next_hyper"] = mean_state[:, STATE_TO_CODE["Hyper"]]
-    out["P_next_normal"] = mean_state[:, STATE_TO_CODE["Normal"]]
-    out["P_next_hypo"] = mean_state[:, STATE_TO_CODE["Hypo"]]
+    out["P_next_hyper"] = mean_state[:, 1]
+    out["P_next_nonhyper"] = mean_state[:, 0]
     out["NextState_Entropy"] = _state_entropy(mean_state)
     out["NextState_MaxProb"] = np.max(mean_state, axis=1)
 
@@ -644,6 +1158,13 @@ def add_stage1_prediction_family(df, stage1_payload, split_key):
     refs = stage1_payload["hyper_margin_reference"]
     out["Pred_FT4_Margin_To_Hyper"] = _compute_margin(pred_ft4_next, refs["FT4"])
     out["Pred_logTSH_Margin_To_Hyper"] = _compute_margin(pred_logtsh_next, refs["logTSH"])
+    out["Pred_FT4_HyperZone"] = (out["Pred_FT4_Margin_To_Hyper"].values > 0).astype(float)
+    out["Pred_logTSH_HyperZone"] = (out["Pred_logTSH_Margin_To_Hyper"].values > 0).astype(float)
+    out["Pred_AnyHyperZone"] = np.maximum(out["Pred_FT4_HyperZone"].values, out["Pred_logTSH_HyperZone"].values)
+    out["Pred_BothHyperZone"] = (
+        out["Pred_FT4_HyperZone"].values * out["Pred_logTSH_HyperZone"].values
+    )
+    out["Pred_HyperEvidence"] = out["P_next_hyper"].values * (1.0 + out["Pred_AnyHyperZone"].values)
     return out
 
 
@@ -671,6 +1192,8 @@ def make_stage2_feature_frames(train_df, test_df, mode, base_current_features=No
         "direct_plus_state_delta_uncertainty",
     }:
         meta_variant = "state_delta_uncertainty"
+    elif mode == "predicted_only_state_rule":
+        meta_variant = "state_rule"
     elif mode == "predicted_only_state_delta":
         meta_variant = "state_delta"
     elif mode == "predicted_only_state_only":
