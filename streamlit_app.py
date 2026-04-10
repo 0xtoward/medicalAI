@@ -69,7 +69,40 @@ def _inject_styles() -> None:
         html, body, [class*="css"]  {
             font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
         }
+        .stApp,
+        .stApp p,
+        .stApp li,
+        .stApp span,
+        .stApp label,
+        .stApp small,
+        .stApp div[data-testid="stMarkdownContainer"] p,
+        .stApp div[data-testid="stCaptionContainer"] {
+            color: var(--body);
+        }
         h1, h2, h3 { color: var(--title); letter-spacing: -0.02em; }
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4 {
+            color: var(--title) !important;
+        }
+        .stApp [data-testid="stWidgetLabel"] p,
+        .stApp [data-testid="stWidgetLabel"] span,
+        .stApp [data-testid="stWidgetLabel"] label,
+        .stApp .st-emotion-cache-16idsys p,
+        .stApp .st-emotion-cache-16idsys span {
+            color: var(--title) !important;
+        }
+        .stApp [data-baseweb="base-input"],
+        .stApp [data-baseweb="input"],
+        .stApp [data-baseweb="select"] > div,
+        .stApp input,
+        .stApp textarea {
+            color: var(--title) !important;
+            background: rgba(255,255,255,0.92) !important;
+        }
+        .stApp [data-baseweb="select"] svg,
+        .stApp [data-baseweb="base-input"] svg {
+            fill: var(--body) !important;
+            color: var(--body) !important;
+        }
         .metric-card {
             padding: 1rem 1.05rem;
             border-radius: 18px;
