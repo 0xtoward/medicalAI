@@ -134,7 +134,7 @@ def _display_plot_grid(plot_specs: list[tuple[str, str]], columns: int = 2) -> N
             if path is None:
                 st.warning(f"缺少图像文件：`{path_str}`")
             else:
-                st.image(str(path), use_container_width=True)
+                st.image(str(path), use_column_width=True)
 
 
 def _render_top_drivers(drivers: list[dict]) -> None:
