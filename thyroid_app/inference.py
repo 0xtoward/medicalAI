@@ -10,10 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-
-from scripts import fixed_landmark_binary as fixed_mod
-from scripts import relapse_teacher_frozen_fuse as teacher_fuse_mod
-from scripts import relapse_threehead_landmark as threehead_mod
+import torch.nn as nn
 from thyroid_app.constants import (
     FIXED_LANDMARKS,
     LAB_FIELD_RANGES,
@@ -31,6 +28,27 @@ from utils.data import extract_flat_features, split_imputed
 from utils.recurrence import build_interval_risk_data
 
 
+HIGH_RISK_WINDOWS = ["1M->3M", "3M->6M", "6M->12M"]
+GLOBAL_CORE_FEATURES = [
+    "Time_In_Normal",
+    "FT3_Current",
+    "Delta_TSH_k0",
+    "FT4_Current",
+    "logTSH_Current",
+    "Prior_Relapse_Count",
+    "Ever_Hyper_Before",
+    "Ever_Hypo_Before",
+    "Start_Time",
+    "Interval_Width",
+]
+GLOBAL_CORE_INTERACTION_FEATURES = [
+    "Time_In_Normal",
+    "FT3_Current",
+    "Delta_TSH_k0",
+]
+THREEHEAD_DROPOUT = 0.15
+
+
 def load_manifest(base_dir: str | Path = "artifacts") -> dict:
     manifest_path = Path(base_dir) / "manifest.json"
     with manifest_path.open("r", encoding="utf-8") as fh:
@@ -44,6 +62,218 @@ def load_bundle(task: str, base_dir: str | Path = "artifacts") -> dict:
     if not bundle_path.is_absolute():
         bundle_path = Path(base_dir).parent / bundle_path
     return joblib.load(bundle_path)
+
+
+def _build_landmark_features_local(X_s, X_d, seq_len):
+    X_base, feat_names = extract_flat_features(X_s, X_d, seq_len)
+    labs = X_d[:, :seq_len, :]
+    final = labs[:, -1, :]
+    prev = labs[:, -2, :] if seq_len > 1 else labs[:, -1, :]
+    first = labs[:, 0, :]
+    eps = 1e-6
+
+    thyroid_idx = STATIC_NAMES.index("ThyroidW")
+    trab_idx = STATIC_NAMES.index("TRAb")
+    extra_blocks = [
+        np.column_stack(
+            [
+                final[:, 0] / (first[:, 0] + eps),
+                final[:, 1] / (first[:, 1] + eps),
+                (final[:, 2] + 1.0) / (first[:, 2] + 1.0),
+            ]
+        ),
+        np.column_stack(
+            [
+                final[:, 0] / (final[:, 1] + eps),
+                final[:, 1] / (final[:, 2] + 1.0),
+            ]
+        ),
+        labs.mean(axis=1),
+        labs.std(axis=1),
+        final - prev,
+        np.column_stack(
+            [
+                X_s[:, thyroid_idx] * final[:, 0],
+                X_s[:, thyroid_idx] * final[:, 1],
+                X_s[:, trab_idx] * final[:, 0],
+                X_s[:, trab_idx] * final[:, 1],
+            ]
+        ),
+    ]
+    extra_names = [
+        "FT3_last_over_0M",
+        "FT4_last_over_0M",
+        "TSH_last_over_0M_plus1",
+        "FT3_last_over_FT4_last",
+        "FT4_last_over_TSH_last_plus1",
+        *[f"{lab}_mean" for lab in ["FT3", "FT4", "TSH"][: labs.shape[-1]]],
+        *[f"{lab}_std" for lab in ["FT3", "FT4", "TSH"][: labs.shape[-1]]],
+        *[f"{lab}_delta_last_prev" for lab in ["FT3", "FT4", "TSH"][: labs.shape[-1]]],
+        "ThyroidW_x_FT3_last",
+        "ThyroidW_x_FT4_last",
+        "TRAb_x_FT3_last",
+        "TRAb_x_FT4_last",
+    ]
+    X_full = np.hstack([X_base] + extra_blocks)
+    return X_full, feat_names + extra_names
+
+
+def _build_threehead_feature_blocks(df, interval_cats, prev_state_cats):
+    static_df = df[STATIC_NAMES].copy().reset_index(drop=True)
+
+    local_cols = [
+        "FT3_Current",
+        "FT4_Current",
+        "logTSH_Current",
+        "Delta_FT4_1step",
+        "Delta_TSH_1step",
+    ]
+    local_df = df[local_cols].copy().reset_index(drop=True)
+    for cat in interval_cats:
+        local_df[f"Window_{cat}"] = (df["Interval_Name"].values == cat).astype(float)
+    for cat in prev_state_cats:
+        local_df[f"PrevState_{cat}"] = (df["Prev_State"].values == cat).astype(float)
+
+    global_df = df[GLOBAL_CORE_FEATURES].copy().reset_index(drop=True)
+    for cat in HIGH_RISK_WINDOWS:
+        dummy = f"CoreWindow_{cat}"
+        global_df[dummy] = (df["Interval_Name"].values == cat).astype(float)
+        for feature in GLOBAL_CORE_INTERACTION_FEATURES:
+            global_df[f"{feature}_x_{dummy}"] = global_df[feature].values * global_df[dummy].values
+
+    return (
+        static_df.apply(pd.to_numeric, errors="coerce").astype(float),
+        local_df.apply(pd.to_numeric, errors="coerce").astype(float),
+        global_df.apply(pd.to_numeric, errors="coerce").astype(float),
+    )
+
+
+def _transform_feature_blocks(scalers, static_df, local_df, global_df):
+    return {
+        "static": scalers["static"].transform(static_df).astype(np.float32),
+        "local": scalers["local"].transform(local_df).astype(np.float32),
+        "global": scalers["global"].transform(global_df).astype(np.float32),
+    }
+
+
+class _MLPBranch(nn.Module):
+    def __init__(self, input_dim, embed_dim, dropout):
+        super().__init__()
+        hidden_dim = max(embed_dim, min(128, max(32, input_dim * 2)))
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, embed_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class _LinearBranch(nn.Module):
+    def __init__(self, input_dim, embed_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class _TeacherPretrainNet(nn.Module):
+    def __init__(
+        self,
+        static_dim,
+        local_dim,
+        global_dim,
+        embed_dim=48,
+        dropout=THREEHEAD_DROPOUT,
+        gate_mode="side_cap",
+        side_gate_cap=None,
+        global_floor=None,
+        temperature=1.0,
+    ):
+        super().__init__()
+        self.static_branch = _MLPBranch(static_dim, embed_dim, dropout)
+        self.local_branch = _MLPBranch(local_dim, embed_dim, dropout)
+        self.global_branch = _LinearBranch(global_dim, embed_dim)
+        self.landmark_adapter = nn.Sequential(
+            nn.Linear(embed_dim * 3, embed_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU(),
+        )
+        self.landmark_head = nn.Linear(embed_dim, 1)
+        self.gate_net = nn.Sequential(
+            nn.Linear(embed_dim * 3 + 1, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 3),
+        )
+        self.shared_norm = nn.LayerNorm(embed_dim)
+        self.teacher_head = nn.Linear(embed_dim + 1, 1)
+        self.next_hyper_head = nn.Linear(embed_dim + 1, 1)
+        self.side_gate_cap = side_gate_cap
+        self.global_floor = global_floor
+        self.temperature = temperature
+
+    def _apply_gate_constraints(self, gate_logits):
+        gate = torch.softmax(gate_logits / self.temperature, dim=1)
+        if self.side_gate_cap is not None:
+            side_gate = torch.clamp(gate[:, :2], max=self.side_gate_cap)
+            side_overflow = (gate[:, :2] - side_gate).clamp_min(0.0).sum(dim=1, keepdim=True)
+            global_gate = gate[:, 2:3] + side_overflow
+            gate = torch.cat([side_gate, global_gate], dim=1)
+        if self.global_floor is not None:
+            global_gate = gate[:, 2:3]
+            side_gate = gate[:, :2]
+            needs_floor = global_gate < self.global_floor
+            if needs_floor.any():
+                remaining = 1.0 - self.global_floor
+                side_sum = side_gate.sum(dim=1, keepdim=True).clamp_min(1e-6)
+                rescaled_side = side_gate * (remaining / side_sum)
+                side_gate = torch.where(needs_floor.expand_as(side_gate), rescaled_side, side_gate)
+                floored_global = torch.full_like(global_gate, self.global_floor)
+                global_gate = torch.where(needs_floor, floored_global, global_gate)
+                gate = torch.cat([side_gate, global_gate], dim=1)
+        return gate
+
+    def forward(self, static_x, local_x, global_x, landmark_obs_mask=None, landmark_obs_value=None):
+        h_static = self.static_branch(static_x)
+        h_local = self.local_branch(local_x)
+        h_global = self.global_branch(global_x)
+        joint = torch.cat([h_static, h_local, h_global], dim=1)
+
+        landmark_hidden = self.landmark_adapter(joint)
+        landmark_logit = self.landmark_head(landmark_hidden).squeeze(1)
+        landmark_prob = torch.sigmoid(landmark_logit)
+        if landmark_obs_mask is None or landmark_obs_value is None:
+            landmark_signal = landmark_prob
+        else:
+            landmark_signal = landmark_obs_mask * landmark_obs_value + (1.0 - landmark_obs_mask) * landmark_prob
+
+        gate_in = torch.cat([joint, landmark_signal.unsqueeze(1)], dim=1)
+        gate = self._apply_gate_constraints(self.gate_net(gate_in))
+        fused = gate[:, 0:1] * h_static + gate[:, 1:2] * h_local + gate[:, 2:3] * h_global
+        fused = self.shared_norm(fused)
+        fused_with_landmark = torch.cat([fused, landmark_signal.unsqueeze(1)], dim=1)
+        teacher_logit = self.teacher_head(fused_with_landmark).squeeze(1)
+        next_hyper_logit = self.next_hyper_head(fused_with_landmark).squeeze(1)
+        return {
+            "teacher_logit": teacher_logit,
+            "landmark_logit": landmark_logit,
+            "next_hyper_logit": next_hyper_logit,
+            "teacher_prob": torch.sigmoid(teacher_logit),
+            "landmark_prob": landmark_prob,
+            "landmark_signal": landmark_signal,
+            "next_hyper_prob": torch.sigmoid(next_hyper_logit),
+            "embedding": fused,
+            "gate": gate,
+        }
 
 
 def _check_range(field_name: str, value: float, lower: float, upper: float, messages: list[str], label: str) -> None:
@@ -356,19 +586,19 @@ def _build_fixed_routed_feature_row(case_payload: dict, landmark: str, bundle: d
     )
     filled = bundle["imputer"].transform(raw)
     xs, ft3, ft4, tsh = split_imputed(filled, len(STATIC_NAMES), seq_len)
-    x_feat, _ = fixed_mod.build_landmark_features(xs, np.stack([ft3, ft4, tsh], axis=-1), seq_len)
+    x_feat, _ = _build_landmark_features_local(xs, np.stack([ft3, ft4, tsh], axis=-1), seq_len)
     frame = pd.DataFrame(x_feat, columns=bundle["feature_names"])
     frame = _align_frame_to_bundle(frame, bundle["feature_names"], bundle.get("feature_medians"))
     return frame
 
 
 def _make_teacher_pretrain_model(bundle: dict):
-    model = teacher_fuse_mod.TeacherPretrainNet(
+    model = _TeacherPretrainNet(
         static_dim=len(bundle["static_features"]),
         local_dim=len(bundle["local_features"]),
         global_dim=len(bundle["global_features"]),
         embed_dim=bundle["embed_dim"],
-        dropout=teacher_fuse_mod.Config.DROPOUT,
+        dropout=THREEHEAD_DROPOUT,
         gate_mode=bundle["gate_variant"]["gate_mode"],
         side_gate_cap=bundle["gate_variant"]["side_cap"],
         global_floor=bundle["gate_variant"]["global_floor"],
@@ -394,12 +624,12 @@ def _predict_relapse_teacher_frozen(case_payload: dict, bundle: dict, base_dir: 
         }
 
     base_row = _build_relapse_base_row(case_payload, landmark)
-    static_df, local_df, global_df = threehead_mod.build_feature_blocks(
+    static_df, local_df, global_df = _build_threehead_feature_blocks(
         base_row,
         bundle["interval_categories"],
         bundle["prev_state_categories"],
     )
-    tensors = threehead_mod.transform_blocks(bundle["block_scalers"], static_df, local_df, global_df)
+    tensors = _transform_feature_blocks(bundle["block_scalers"], static_df, local_df, global_df)
 
     if timestamp_to_index(landmark) >= timestamp_to_index("3M"):
         landmark_case = _truncate_case_payload(case_payload, "3M")
