@@ -1,0 +1,9 @@
+Candidate,Base_Type,Feature_Selection,Calibration,Best_Model,PR_AUC,AUC,Brier,Threshold,Note
+deep_committee_g234_fs_raw,raw,True,none,Logistic Reg.,0.33550594012349055,0.8282885577270149,0.06881586137974607,0.09999999999999999,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_fs_cal_global,calibrated,True,global,Calibrated,0.33550594012349055,0.8282885577270149,0.06382590612476094,0.12999999999999998,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_fs_cal_interval,calibrated,True,interval,Calibrated,0.33544645367901,0.8237508379312122,0.06372108687275437,0.11999999999999998,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_fs_cal_phase,calibrated,True,phase,Calibrated,0.33393521047803687,0.8240086629196102,0.06364797185990079,0.13999999999999999,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_nofs_raw,raw,False,none,Elastic LR,0.3211575562981721,0.8294229876759656,0.06358453692802989,0.13999999999999999,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_nofs_cal_global,calibrated,False,global,Calibrated,0.3211575562981721,0.8294229876759656,0.06390017817951012,0.13999999999999999,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_nofs_cal_phase,calibrated,False,phase,Calibrated,0.3185777894899694,0.8227711029753004,0.06434669545553824,0.13999999999999999,"committee sidecar over g2_nh,g3_n,g4_nh"
+deep_committee_g234_nofs_cal_interval,calibrated,False,interval,Calibrated,0.3026604288630463,0.8209147630588357,0.06447949189925843,0.14999999999999997,"committee sidecar over g2_nh,g3_n,g4_nh"

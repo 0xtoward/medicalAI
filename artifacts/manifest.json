@@ -1,6 +1,6 @@
 {
-  "version": "v1",
-  "ui_language": "en",
+  "version": "v3",
+  "ui_language": "zh",
   "artifacts_root": "artifacts",
   "tasks": {
     "relapse": {
@@ -30,7 +30,98 @@
         "HalfLife",
         "Dose"
       ],
-      "required_state_semantics": "Current state must be Normal for relapse prediction.",
+      "required_state_semantics": "动态复发预测要求当前状态为 Normal。",
+      "fit_metrics": {
+        "auc": 0.8932417582417582,
+        "prauc": 0.392180742916538
+      },
+      "validation_metrics": {
+        "auc": 0.868623450007848,
+        "prauc": 0.3721345083672607,
+        "f1": 0.5185185185185185,
+        "threshold": 0.1999999999999999
+      },
+      "test_metrics": {
+        "auc": 0.7941009642654566,
+        "prauc": 0.3491508724351942,
+        "f1": 0.3146067415730337,
+        "recall": 0.34146341463414637,
+        "specificity": 0.9281183932346723,
+        "threshold": 0.1999999999999999
+      },
+      "decision_threshold": 0.1999999999999999,
+      "global_drivers": [
+        {
+          "feature": "Teacher_Logit",
+          "coefficient": 0.5508842981510519
+        },
+        {
+          "feature": "Gate_Static",
+          "coefficient": 0.26813534176269893
+        },
+        {
+          "feature": "Gate_Local",
+          "coefficient": -0.268135249642692
+        },
+        {
+          "feature": "Landmark_Signal",
+          "coefficient": 0.15991561006641555
+        }
+      ],
+      "model_name": "Landmark-guided Local-Global Multi-Head Dynamic Hazard Network",
+      "deployment_label": "动态复发预警",
+      "baseline_task": "relapse_direct",
+      "baseline_metrics": {
+        "auc": 0.841386067137627,
+        "prauc": 0.333887622324112,
+        "brier": 0.06388086865989832,
+        "acc": 0.7957198443579766,
+        "bacc": 0.7442118290104678,
+        "f1": 0.34782608695652173,
+        "recall": 0.6829268292682927,
+        "specificity": 0.8054968287526427,
+        "tp": 28.0,
+        "fp": 92.0,
+        "fn": 13.0,
+        "tn": 381.0,
+        "threshold": 0.12999999999999998
+      },
+      "patient_quartiles": [
+        0.011189687678602844,
+        0.0345856294224576,
+        0.1416645537278588,
+        0.34274176624099767,
+        0.7766593054059688
+      ]
+    },
+    "relapse_direct": {
+      "bundle_path": "artifacts/relapse_direct/bundle.joblib",
+      "current_landmarks": [
+        "1M",
+        "3M",
+        "6M",
+        "12M",
+        "18M"
+      ],
+      "required_static_fields": [
+        "Sex",
+        "Age",
+        "Height",
+        "Weight",
+        "BMI",
+        "Exophthalmos",
+        "ThyroidW",
+        "RAI3d",
+        "TreatCount",
+        "TGAb",
+        "TPOAb",
+        "TRAb",
+        "Uptake24h",
+        "MaxUptake",
+        "HalfLife",
+        "Dose"
+      ],
+      "required_state_semantics": "动态复发预测要求当前状态为 Normal。",
       "test_metrics": {
         "auc": 0.841386067137627,
         "prauc": 0.333887622324112,
@@ -62,8 +153,6 @@
         "threshold": 0.25000000000000006
       },
       "decision_threshold": 0.12999999999999998,
-      "patient_aggregation_threshold": 0.25000000000000006,
-      "projection_method": "constant_next_window_risk",
       "global_drivers": [
         {
           "feature": "Time_In_Normal",
@@ -105,7 +194,8 @@
           "feature": "Window_6M->12M",
           "coefficient": 0.04870078854520607
         }
-      ]
+      ],
+      "model_name": "Logistic Reg."
     },
     "fixed_3m": {
       "bundle_path": "artifacts/fixed_3m/bundle.joblib",
@@ -169,69 +259,6 @@
           "importance": 0.030746215857734852
         }
       ]
-    },
-    "fixed_6m": {
-      "bundle_path": "artifacts/fixed_6m/bundle.joblib",
-      "landmark": "6M",
-      "test_metrics": {
-        "auc": 0.90439453125,
-        "prauc": 0.8518525109177237,
-        "brier": 0.11441179635158776,
-        "acc": 0.8269230769230769,
-        "bacc": 0.83828125,
-        "f1": 0.797752808988764,
-        "recall": 0.8875,
-        "specificity": 0.7890625,
-        "tp": 71.0,
-        "fp": 27.0,
-        "fn": 9.0,
-        "tn": 101.0,
-        "threshold": 0.42000000000000004
-      },
-      "decision_threshold": 0.42000000000000004,
-      "model_name": "Random Forest",
-      "global_drivers": [
-        {
-          "feature": "FT3_3M",
-          "importance": 0.24863089602637778
-        },
-        {
-          "feature": "FT3_6M",
-          "importance": 0.19836996044584163
-        },
-        {
-          "feature": "FT4_3M",
-          "importance": 0.07956331945294302
-        },
-        {
-          "feature": "TSH_6M",
-          "importance": 0.07217104951192997
-        },
-        {
-          "feature": "TSH_3M",
-          "importance": 0.07091717660206012
-        },
-        {
-          "feature": "D_TSH_6M-0M",
-          "importance": 0.04417772887005372
-        },
-        {
-          "feature": "D_FT3_6M-3M",
-          "importance": 0.03741004476988115
-        },
-        {
-          "feature": "ThyroidW",
-          "importance": 0.03196397880125237
-        },
-        {
-          "feature": "FT4_6M",
-          "importance": 0.03158875535643278
-        },
-        {
-          "feature": "D_TSH_3M-0M",
-          "importance": 0.0312550749248062
-        }
-      ]
     }
   },
   "sample_cases": {
@@ -272,7 +299,7 @@
       "states": {
         "1M": "Normal"
       },
-      "expected_probability": 0.1407962553700759
+      "expected_probability": 0.0894526643970983
     },
     "fixed": {
       "3M": {

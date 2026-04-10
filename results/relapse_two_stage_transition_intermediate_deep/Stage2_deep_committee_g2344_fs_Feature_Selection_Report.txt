@@ -1,0 +1,6 @@
+original_features=10
+selected_features=10
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=g4_n_Prob, committee_g2344_SpreadProb, g2_nh_x_g3_n, g2_nh_minus_g4_n, g2_nh_x_g4_nh, g3_n_minus_g4_n, g4_n_minus_g4_nh, Window_18M->24M_x_g2_nh_Logit, Window_1M->3M_x_g2_nh_Logit, Window_3M->6M_x_g2_nh_Logit
+note=committee sidecar over g2_nh,g3_n,g4_n,g4_nh; feature_selection=True

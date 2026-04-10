@@ -1,0 +1,6 @@
+original_features=10
+selected_features=10
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=committee_g2344_Prob, fusion_committee_g2344_StdLogit, Direct_minus_committee_g2344, Window_18M->24M_x_Direct_Logit, Window_1M->3M_x_Direct_Logit, Window_1M->3M_x_committee_g2344_Logit, Window_3M->6M_x_Champion_Logit, Window_3M->6M_x_Direct_Logit, Window_6M->12M, fusion_committee_g2344_Direct_x_LatentMean
+note=multilogit fusion over Champion,Direct,committee_g2344; feature_selection=True

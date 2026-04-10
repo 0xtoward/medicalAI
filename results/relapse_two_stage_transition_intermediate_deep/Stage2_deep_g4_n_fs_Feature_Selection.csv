@@ -1,0 +1,6 @@
+feature,coefficient,abs_coefficient,selected
+G4_ResidualPCA_PC1,,,True
+G4_ResidualPCA_PC2,,,True
+G4_ResidualPCA_PC3,,,True
+G4_ResidualPCA_PC4,,,True
+G4_ResidualPCA_ReconRMSE,,,True

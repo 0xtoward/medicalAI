@@ -1,0 +1,6 @@
+original_features=8
+selected_features=8
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=g3_n_Logit, g3_n_Prob, committee_g34_MeanLogit, committee_g34_StdLogit, committee_g34_SpreadProb, g3_n_x_g4_nh, Window_1M->3M_x_g3_n_Logit, Window_3M->6M
+note=committee sidecar over g3_n,g4_nh; feature_selection=True

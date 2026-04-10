@@ -1,0 +1,18 @@
+{
+  "best_backbone_run": "global_floor_040",
+  "best_gate_mode": "global_floor",
+  "best_gate_global_floor": 0.4,
+  "best_experiment": "teacher_landmark_gate_raw__lr",
+  "best_model_family": "lr",
+  "best_pack_name": "teacher_landmark_gate_raw",
+  "best_features": [
+    "Teacher_Logit",
+    "Landmark_Signal",
+    "Gate_Static",
+    "Gate_Local"
+  ],
+  "best_threshold": 0.1999999999999999,
+  "best_val_prauc": 0.3721345083672607,
+  "best_test_prauc": 0.349,
+  "backbone_checkpoint": "results/relapse_teacher_frozen_fuse/backbones/Pretrained_Backbone_global_floor_040.pkl"
+}

@@ -1,0 +1,5 @@
+Feature,Source,CV_PR_AUC,Best_Params
+Teacher_Cal,Teacher_Prob,0.21810474568954052,"{'clf__l1_ratio': 0.5, 'clf__C': 5}"
+LandmarkSignal_Cal,Landmark_Signal,0.1122050164740533,"{'clf__l1_ratio': 0.5, 'clf__C': 5}"
+LandmarkProb_Cal,Landmark_Prob,0.12229632033558983,"{'clf__l1_ratio': 0.5, 'clf__C': 5}"
+NextHyper_Cal,NextHyper_Prob,0.2597055434927003,"{'clf__l1_ratio': 0.5, 'clf__C': 5}"

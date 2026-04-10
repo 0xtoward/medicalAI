@@ -27,14 +27,17 @@ from sklearn.base import clone
 from sklearn.svm import SVC
 from sklearn.metrics import (roc_auc_score, average_precision_score, roc_curve,
                              f1_score, confusion_matrix)
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
-# import lightgbm as lgb  # Disabled to keep the binary manuscript focused on RF-style interpretable ensembles.
 from imblearn.ensemble import BalancedRandomForestClassifier
-# from tabpfn import TabPFNClassifier  # Disabled for the current manuscript version.
 
-from utils.config import SEED
+try:
+    from lightgbm import LGBMClassifier
+except Exception:
+    LGBMClassifier = None
+
+from utils.config import SEED, STATIC_NAMES
 from utils.data import load_data, fit_missforest, split_imputed, extract_flat_features
 from utils.evaluation import (
     bootstrap_group_cis,
@@ -70,12 +73,77 @@ np.random.seed(Config.SEED)
 
 
 # ==========================================
-# 2. Tuning specs for ALL models
+# 2. Landmark feature engineering
+# ==========================================
+def build_landmark_features(X_s, X_d, seq_len):
+    """Augment base flatten+deltas with compact trajectory and response features."""
+    X_base, feat_names = extract_flat_features(X_s, X_d, seq_len)
+    labs = X_d[:, :seq_len, :]
+    final = labs[:, -1, :]
+    prev = labs[:, -2, :] if seq_len > 1 else labs[:, -1, :]
+    first = labs[:, 0, :]
+    eps = 1e-6
+
+    thyroid_idx = STATIC_NAMES.index("ThyroidW")
+    trab_idx = STATIC_NAMES.index("TRAb")
+
+    extra_blocks = [
+        np.column_stack(
+            [
+                final[:, 0] / (first[:, 0] + eps),
+                final[:, 1] / (first[:, 1] + eps),
+                (final[:, 2] + 1.0) / (first[:, 2] + 1.0),
+            ]
+        ),
+        np.column_stack(
+            [
+                final[:, 0] / (final[:, 1] + eps),
+                final[:, 1] / (final[:, 2] + 1.0),
+            ]
+        ),
+        labs.mean(axis=1),
+        labs.std(axis=1),
+        final - prev,
+        np.column_stack(
+            [
+                X_s[:, thyroid_idx] * final[:, 0],
+                X_s[:, thyroid_idx] * final[:, 1],
+                X_s[:, trab_idx] * final[:, 0],
+                X_s[:, trab_idx] * final[:, 1],
+            ]
+        ),
+    ]
+    extra_names = [
+        "FT3_last_over_0M",
+        "FT4_last_over_0M",
+        "TSH_last_over_0M_plus1",
+        "FT3_last_over_FT4_last",
+        "FT4_last_over_TSH_last_plus1",
+        "FT3_mean",
+        "FT4_mean",
+        "TSH_mean",
+        "FT3_std",
+        "FT4_std",
+        "TSH_std",
+        "FT3_last_minus_prev",
+        "FT4_last_minus_prev",
+        "TSH_last_minus_prev",
+        "ThyroidW_x_FT3_last",
+        "ThyroidW_x_FT4_last",
+        "TRAb_x_FT3_last",
+        "TRAb_x_FT4_last",
+    ]
+    X_feat = np.concatenate([X_base] + extra_blocks, axis=1)
+    return X_feat, feat_names + extra_names
+
+
+# ==========================================
+# 3. Tuning specs for ALL models
 # ==========================================
 def get_tune_specs():
     """Each entry: (base_estimator, param_grid, color, linestyle, n_iter, n_jobs)."""
     S = Config.SEED
-    return {
+    specs = {
         "Logistic Reg.": (
             Pipeline([('scaler', StandardScaler()),
                       ('lr', LogisticRegression(max_iter=2000, random_state=S))]),
@@ -151,6 +219,285 @@ def get_tune_specs():
         #     "#bab0ac", "-", 0, 1
         # ),
     }
+    if LGBMClassifier is not None:
+        specs["LightGBM"] = (
+            LGBMClassifier(
+                random_state=S,
+                objective="binary",
+                verbosity=-1,
+                n_jobs=1,
+                class_weight="balanced",
+                n_estimators=300,
+                learning_rate=0.05,
+                num_leaves=15,
+                max_depth=3,
+                min_child_samples=20,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.1,
+                reg_lambda=1.0,
+            ),
+            None,
+            "#e45756",
+            "--",
+            0,
+            1,
+        )
+    return specs
+
+
+def search_best_threshold(y_true, proba, objective="f1", low=0.05, high=0.80, step=0.005):
+    """Pick a threshold using train OOF predictions only."""
+    y_true = np.asarray(y_true).astype(int)
+    proba = np.asarray(proba, dtype=float)
+    thresholds = np.arange(low, high + 1e-9, step)
+
+    def score_for(thr):
+        metrics = compute_binary_metrics(y_true, proba, thr)
+        if objective == "acc":
+            return (metrics["acc"], metrics["bacc"], metrics["f1"], metrics["auc"])
+        if objective == "bacc":
+            return (metrics["bacc"], metrics["f1"], metrics["acc"], metrics["auc"])
+        return (metrics["f1"], metrics["bacc"], metrics["acc"], metrics["auc"])
+
+    return max(thresholds, key=score_for)
+
+
+def build_weighted_blend(positive_model, anchor_model, y_tr):
+    """Blend two already-evaluated models using OOF accuracy on train."""
+    best_payload = None
+    for positive_weight in np.arange(0.0, 1.0 + 1e-9, 0.05):
+        anchor_weight = 1.0 - positive_weight
+        oof = (
+            positive_weight * positive_model["oof_proba"]
+            + anchor_weight * anchor_model["oof_proba"]
+        )
+        thr = search_best_threshold(y_tr, oof, objective="acc")
+        train_metrics = compute_binary_metrics(y_tr, oof, thr)
+        key = (
+            train_metrics["acc"],
+            train_metrics["bacc"],
+            train_metrics["f1"],
+            train_metrics["auc"],
+        )
+        payload = {
+            "weights": (positive_weight, anchor_weight),
+            "thr": thr,
+            "oof_proba": oof,
+            "train_fit_proba": (
+                positive_weight * positive_model["train_fit_proba"]
+                + anchor_weight * anchor_model["train_fit_proba"]
+            ),
+            "proba": (
+                positive_weight * positive_model["proba"]
+                + anchor_weight * anchor_model["proba"]
+            ),
+            "key": key,
+        }
+        if best_payload is None or payload["key"] > best_payload["key"]:
+            best_payload = payload
+    return best_payload
+
+
+def rank_error_gate_features(X_df, y_true, proba, thr, top_k=8):
+    """Rank features whose values shift most on train OOF mistakes."""
+    y_true = np.asarray(y_true).astype(int)
+    pred = (np.asarray(proba, dtype=float) >= thr).astype(int)
+    error_mask = pred != y_true
+
+    rows = []
+    if error_mask.sum() == 0 or error_mask.sum() == len(error_mask):
+        return list(X_df.columns[:top_k]), pd.DataFrame(rows)
+
+    for col in X_df.columns:
+        values = pd.to_numeric(X_df[col], errors="coerce").to_numpy(dtype=float)
+        std = float(np.nanstd(values))
+        if std < 1e-8:
+            continue
+        error_mean = float(np.nanmean(values[error_mask]))
+        correct_mean = float(np.nanmean(values[~error_mask]))
+        score = abs(error_mean - correct_mean) / (std + 1e-6)
+        rows.append({
+            "feature": col,
+            "error_shift": score,
+            "error_mean": error_mean,
+            "correct_mean": correct_mean,
+        })
+
+    feature_df = pd.DataFrame(rows).sort_values("error_shift", ascending=False).reset_index(drop=True)
+    ranked = feature_df["feature"].head(top_k).tolist()
+
+    clinical_anchors = [
+        "ThyroidW_x_FT3_last",
+        "ThyroidW_x_FT4_last",
+        "TGAb",
+        "TPOAb",
+        "TRAb_x_FT3_last",
+        "TRAb_x_FT4_last",
+        "ThyroidW",
+    ]
+    for feat in clinical_anchors:
+        if feat in X_df.columns and feat not in ranked:
+            ranked.append(feat)
+
+    return ranked, feature_df
+
+
+def build_specialist_candidates(results):
+    """Reuse tuned global models and add a stronger tree specialist."""
+    specs = {}
+    if "Elastic LR" in results and results["Elastic LR"]["model"] is not None:
+        specs["Elastic"] = clone(results["Elastic LR"]["model"])
+    if "Random Forest" in results and results["Random Forest"]["model"] is not None:
+        specs["RF"] = clone(results["Random Forest"]["model"])
+    if "LightGBM" in results and results["LightGBM"]["model"] is not None:
+        specs["LGBM"] = clone(results["LightGBM"]["model"])
+
+    specs["ET"] = ExtraTreesClassifier(
+        n_estimators=400,
+        max_depth=None,
+        min_samples_leaf=3,
+        min_samples_split=6,
+        max_features="sqrt",
+        class_weight="balanced",
+        random_state=Config.SEED,
+        n_jobs=1,
+    )
+    return specs
+
+
+def build_routed_specialist_model(
+    main_name,
+    main_result,
+    results,
+    X_tr_df,
+    y_tr,
+    groups_tr,
+    X_te_df,
+    cv,
+    objective="acc",
+):
+    """
+    Search a gate+specialist route using train OOF errors only.
+
+    The main model handles all samples by default; gated samples are overwritten
+    by a specialist model trained only on that harder subgroup.
+    """
+    candidate_features, feature_rank_df = rank_error_gate_features(
+        X_tr_df, y_tr, main_result["oof_proba"], main_result["thr"]
+    )
+    specialist_candidates = build_specialist_candidates(results)
+    if not candidate_features or not specialist_candidates:
+        return None, pd.DataFrame(), feature_rank_df
+
+    main_train_metrics = compute_binary_metrics(y_tr, main_result["oof_proba"], main_result["thr"])
+    main_key = (
+        main_train_metrics["acc"],
+        main_train_metrics["bacc"],
+        main_train_metrics["f1"],
+        main_train_metrics["auc"],
+    )
+
+    quantiles = (0.65, 0.70, 0.75, 0.80, 0.85, 0.90)
+    search_rows = []
+    best_payload = None
+
+    for feat in candidate_features:
+        feat_tr = X_tr_df[feat].to_numpy(dtype=float)
+        feat_te = X_te_df[feat].to_numpy(dtype=float)
+
+        for q in quantiles:
+            cutoff = float(np.nanquantile(feat_tr, q))
+            gate_tr = feat_tr >= cutoff
+            gate_te = feat_te >= cutoff
+            gate_count = int(gate_tr.sum())
+            gate_rate = float(gate_tr.mean())
+
+            if gate_count < 24 or gate_rate < 0.10 or gate_rate > 0.40:
+                continue
+            if len(np.unique(y_tr[gate_tr])) < 2:
+                continue
+
+            for spec_name, spec_model in specialist_candidates.items():
+                routed_oof = main_result["oof_proba"].copy()
+                valid_folds = 0
+
+                for f_tr, f_val in cv.split(X_tr_df, y_tr, groups=groups_tr):
+                    fold_train_idx = f_tr[gate_tr[f_tr]]
+                    fold_val_idx = f_val[gate_tr[f_val]]
+                    if len(fold_val_idx) == 0:
+                        continue
+                    if len(fold_train_idx) < 18 or len(np.unique(y_tr[fold_train_idx])) < 2:
+                        valid_folds = -1
+                        break
+
+                    m = clone(spec_model)
+                    m.fit(X_tr_df.iloc[fold_train_idx], y_tr[fold_train_idx])
+                    routed_oof[fold_val_idx] = m.predict_proba(X_tr_df.iloc[fold_val_idx])[:, 1]
+                    valid_folds += 1
+
+                if valid_folds <= 0:
+                    continue
+
+                best_thr = search_best_threshold(y_tr, routed_oof, objective=objective)
+                train_metrics = compute_binary_metrics(y_tr, routed_oof, best_thr)
+                key = (
+                    train_metrics["acc"],
+                    train_metrics["bacc"],
+                    train_metrics["f1"],
+                    train_metrics["auc"],
+                )
+
+                full_model = clone(spec_model)
+                full_model.fit(X_tr_df.loc[gate_tr], y_tr[gate_tr])
+
+                routed_train_fit = main_result["train_fit_proba"].copy()
+                routed_train_fit[gate_tr] = full_model.predict_proba(X_tr_df.loc[gate_tr])[:, 1]
+
+                routed_test = main_result["proba"].copy()
+                if gate_te.any():
+                    routed_test[gate_te] = full_model.predict_proba(X_te_df.loc[gate_te])[:, 1]
+
+                row = {
+                    "main_model": main_name,
+                    "gate_feature": feat,
+                    "quantile": q,
+                    "direction": "high",
+                    "cutoff": cutoff,
+                    "gate_rate": gate_rate,
+                    "specialist": spec_name,
+                    "train_acc": train_metrics["acc"],
+                    "train_bacc": train_metrics["bacc"],
+                    "train_f1": train_metrics["f1"],
+                    "train_auc": train_metrics["auc"],
+                    "threshold": best_thr,
+                }
+                search_rows.append(row)
+
+                payload = {
+                    "key": key,
+                    "thr": best_thr,
+                    "oof_proba": routed_oof,
+                    "train_fit_proba": routed_train_fit,
+                    "proba": routed_test,
+                    "gate_feature": feat,
+                    "gate_quantile": q,
+                    "gate_cutoff": cutoff,
+                    "gate_rate": gate_rate,
+                    "specialist_name": spec_name,
+                    "specialist_model": full_model,
+                }
+                if best_payload is None or payload["key"] > best_payload["key"]:
+                    best_payload = payload
+
+    search_df = pd.DataFrame(search_rows).sort_values(
+        ["train_acc", "train_bacc", "train_f1", "train_auc"],
+        ascending=False,
+    ).reset_index(drop=True) if search_rows else pd.DataFrame()
+
+    if best_payload is None or best_payload["key"] <= main_key:
+        return None, search_df, feature_rank_df
+    return best_payload, search_df, feature_rank_df
 
 
 def fit_candidate_model(base, grid, n_iter, n_jobs, cv, X_tr_df, y_tr, groups_tr):
@@ -234,12 +581,8 @@ def run_experiment(landmark_name, seq_len):
 
     Xd_tr = np.stack([f3_tr, f4_tr, ts_tr], axis=-1)
     Xd_te = np.stack([f3_te, f4_te, ts_te], axis=-1)
-    X_tr_feat, feat_names = extract_flat_features(xs_tr, Xd_tr, seq_len)
-    X_te_feat, _ = extract_flat_features(xs_te, Xd_te, seq_len)
-
-    scaler = StandardScaler().fit(X_tr_feat)
-    X_tr = scaler.transform(X_tr_feat)
-    X_te = scaler.transform(X_te_feat)
+    X_tr_feat, feat_names = build_landmark_features(xs_tr, Xd_tr, seq_len)
+    X_te_feat, _ = build_landmark_features(xs_te, Xd_te, seq_len)
 
     # Binary label: 1=Hyper (outcome==1), 0=Non-Hyper
     y_tr = (y_raw[train_idx] == 1).astype(int)
@@ -250,8 +593,8 @@ def run_experiment(landmark_name, seq_len):
     print(f"  Test:  {n_test_records} records  (Hyper={y_te.sum()}, Non-Hyper={len(y_te)-y_te.sum()})")
     print(f"  Features: {len(feat_names)}")
 
-    X_tr_df = pd.DataFrame(X_tr, columns=feat_names)
-    X_te_df = pd.DataFrame(X_te, columns=feat_names)
+    X_tr_df = pd.DataFrame(X_tr_feat, columns=feat_names)
+    X_te_df = pd.DataFrame(X_te_feat, columns=feat_names)
 
     # ---- Hyperparameter tuning: ALL models (GroupKFold) ----
     print("\n  Tuning ALL models (RandomizedSearchCV + GroupKFold)...")
@@ -267,15 +610,17 @@ def run_experiment(landmark_name, seq_len):
         suffix = "[fixed config]" if best_params is None else str(best_params)
         print(f"    {name:<18s} CV PR-AUC={best_score:.3f}  {suffix}")
 
+    tag = landmark_name.replace(" ", "_")[:4]
+
     # ---- OOF threshold + evaluate ----
     print("\n  OOF threshold selection + evaluation...")
     results = {}
 
-    hdr = (f"  {'Model':<18s} {'AUC':>5} {'PR-AUC':>7} {'Thr':>4} "
+    hdr = (f"  {'Model':<26s} {'AUC':>5} {'PR-AUC':>7} {'Thr':>5} {'Acc':>5} "
            f"{'Recall':>6} {'Spec':>6} {'F1':>5}  {'TP':>3} {'FP':>4} {'FN':>3} {'TN':>4}")
-    print(f"\n{'='*79}")
+    print(f"\n{'='*104}")
     print(hdr)
-    print(f"{'='*79}")
+    print(f"{'='*104}")
 
     for name, (model, color, ls) in model_zoo.items():
         oof = np.zeros(len(y_tr))
@@ -284,46 +629,153 @@ def run_experiment(landmark_name, seq_len):
             m.fit(X_tr_df.iloc[f_tr], y_tr[f_tr])
             oof[f_val] = m.predict_proba(X_tr_df.iloc[f_val])[:, 1]
 
-        best_thr, best_f1 = 0.5, 0.0
-        for thr in np.arange(0.05, 0.60, 0.01):
-            f = f1_score(y_tr, (oof >= thr).astype(int), zero_division=0)
-            if f > best_f1:
-                best_f1, best_thr = f, thr
+        best_thr = search_best_threshold(y_tr, oof, objective="f1")
 
         model.fit(X_tr_df, y_tr)
         train_fit_proba = model.predict_proba(X_tr_df)[:, 1]
         proba = model.predict_proba(X_te_df)[:, 1]
         pred = (proba >= best_thr).astype(int)
 
-        auc = roc_auc_score(y_te, proba)
-        prauc = average_precision_score(y_te, proba)
-        f1 = f1_score(y_te, pred, zero_division=0)
+        metrics = compute_binary_metrics(y_te, proba, best_thr)
         cm = confusion_matrix(y_te, pred)
         tn, fp, fn, tp = cm.ravel()
-        recall = tp / (tp + fn) if (tp + fn) else np.nan
-        specificity = tn / (tn + fp) if (tn + fp) else np.nan
+        results[name] = dict(
+            proba=proba,
+            auc=metrics["auc"],
+            prauc=metrics["prauc"],
+            acc=metrics["acc"],
+            bacc=metrics["bacc"],
+            recall=metrics["recall"],
+            specificity=metrics["specificity"],
+            f1=metrics["f1"],
+            thr=best_thr,
+            tp=tp,
+            fp=fp,
+            fn=fn,
+            tn=tn,
+            model=model,
+            color=color,
+            ls=ls,
+            oof_proba=oof,
+            train_fit_proba=train_fit_proba,
+        )
+        print(f"  {name:<26s} {metrics['auc']:>4.3f} {metrics['prauc']:>6.3f} {best_thr:>4.2f} "
+              f"{metrics['acc']:>4.3f} {metrics['recall']:>5.3f} {metrics['specificity']:>5.3f} "
+              f"{metrics['f1']:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}")
 
-        results[name] = dict(proba=proba, auc=auc, prauc=prauc, recall=recall, specificity=specificity,
-                             f1=f1, thr=best_thr, tp=tp, fp=fp, fn=fn, tn=tn,
-                             model=model, color=color, ls=ls,
-                             oof_proba=oof, train_fit_proba=train_fit_proba)
+    if "Elastic LR" in results and "LightGBM" in results:
+        blend = build_weighted_blend(results["Elastic LR"], results["LightGBM"], y_tr)
+        blend_metrics = compute_binary_metrics(y_te, blend["proba"], blend["thr"])
+        pred = (blend["proba"] >= blend["thr"]).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_te, pred).ravel()
+        pos_w, anchor_w = blend["weights"]
+        blend_name = "Elastic+LGBM Blend"
+        results[blend_name] = dict(
+            proba=blend["proba"],
+            auc=blend_metrics["auc"],
+            prauc=blend_metrics["prauc"],
+            acc=blend_metrics["acc"],
+            bacc=blend_metrics["bacc"],
+            recall=blend_metrics["recall"],
+            specificity=blend_metrics["specificity"],
+            f1=blend_metrics["f1"],
+            thr=blend["thr"],
+            tp=tp,
+            fp=fp,
+            fn=fn,
+            tn=tn,
+            model=None,
+            color="#2f6f4f",
+            ls="-",
+            oof_proba=blend["oof_proba"],
+            train_fit_proba=blend["train_fit_proba"],
+            blend_weights=(pos_w, anchor_w),
+        )
+        print(f"  {blend_name:<26s} {blend_metrics['auc']:>4.3f} {blend_metrics['prauc']:>6.3f} {blend['thr']:>4.2f} "
+              f"{blend_metrics['acc']:>4.3f} {blend_metrics['recall']:>5.3f} {blend_metrics['specificity']:>5.3f} "
+              f"{blend_metrics['f1']:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}"
+              f"   [w={pos_w:.2f}/{anchor_w:.2f}]")
 
-        star = " *" if auc == max(r['auc'] for r in results.values()) else "  "
-        print(f"{star}{name:<18s} {auc:>4.3f} {prauc:>6.3f} {best_thr:>3.2f} {recall:>5.3f} "
-              f"{specificity:>5.3f} {f1:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}")
+    if landmark_name == "3-Month":
+        route_anchor_name = "Elastic+LGBM Blend" if "Elastic+LGBM Blend" in results else max(
+            results, key=lambda k: results[k]["acc"]
+        )
+        routed, routed_search_df, routed_feature_df = build_routed_specialist_model(
+            route_anchor_name,
+            results[route_anchor_name],
+            results,
+            X_tr_df,
+            y_tr,
+            groups_tr,
+            X_te_df,
+            gkf,
+            objective="acc",
+        )
+        if not routed_feature_df.empty:
+            routed_feature_df.to_csv(
+                Config.OUT_DIR / f"Routed_Error_Features_{tag}.csv",
+                index=False,
+            )
+            top_feats = ", ".join(routed_feature_df["feature"].head(5).tolist())
+            print(f"    Routed error features: {top_feats}")
+        if not routed_search_df.empty:
+            routed_search_df.to_csv(
+                Config.OUT_DIR / f"Routed_Search_{tag}.csv",
+                index=False,
+            )
+        if routed is not None:
+            routed_metrics = compute_binary_metrics(y_te, routed["proba"], routed["thr"])
+            pred = (routed["proba"] >= routed["thr"]).astype(int)
+            tn, fp, fn, tp = confusion_matrix(y_te, pred).ravel()
+            routed_name = f"{route_anchor_name} Routed"
+            results[routed_name] = dict(
+                proba=routed["proba"],
+                auc=routed_metrics["auc"],
+                prauc=routed_metrics["prauc"],
+                acc=routed_metrics["acc"],
+                bacc=routed_metrics["bacc"],
+                recall=routed_metrics["recall"],
+                specificity=routed_metrics["specificity"],
+                f1=routed_metrics["f1"],
+                thr=routed["thr"],
+                tp=tp,
+                fp=fp,
+                fn=fn,
+                tn=tn,
+                model=None,
+                color="#1b4332",
+                ls="-",
+                oof_proba=routed["oof_proba"],
+                train_fit_proba=routed["train_fit_proba"],
+                route_main=route_anchor_name,
+                route_feature=routed["gate_feature"],
+                route_quantile=routed["gate_quantile"],
+                route_cutoff=routed["gate_cutoff"],
+                route_gate_rate=routed["gate_rate"],
+                route_specialist=routed["specialist_name"],
+            )
+            print(
+                f"  {routed_name:<26s} {routed_metrics['auc']:>4.3f} {routed_metrics['prauc']:>6.3f} {routed['thr']:>4.2f} "
+                f"{routed_metrics['acc']:>4.3f} {routed_metrics['recall']:>5.3f} {routed_metrics['specificity']:>5.3f} "
+                f"{routed_metrics['f1']:>4.3f}  {tp:>3} {fp:>4} {fn:>3} {tn:>4}"
+                f"   [gate={routed['gate_feature']}>=q{routed['gate_quantile']:.2f}, "
+                f"spec={routed['specialist_name']}, rate={routed['gate_rate']:.2f}]"
+            )
 
-    print(f"{'='*79}")
+    print(f"{'='*104}")
     best_auc_name = max(results, key=lambda k: results[k]['auc'])
     best_prauc_name = max(results, key=lambda k: results[k]['prauc'])
+    best_acc_name = max(results, key=lambda k: results[k]['acc'])
     print(f"  Best AUC:    {best_auc_name} ({results[best_auc_name]['auc']:.3f})")
     print(f"  Best PR-AUC: {best_prauc_name} ({results[best_prauc_name]['prauc']:.3f})")
+    print(f"  Best Acc:    {best_acc_name} ({results[best_acc_name]['acc']:.3f})")
 
     perf_domains = {
         "Train_Fit": {"y_true": y_tr, "proba_key": "train_fit_proba"},
         "Validation_OOF": {"y_true": y_tr, "proba_key": "oof_proba"},
         "Test_Temporal": {"y_true": y_te, "proba_key": "proba"},
     }
-    perf_metric_keys = ["auc", "recall", "specificity", "f1"]
+    perf_metric_keys = ["auc", "acc", "recall", "specificity", "f1"]
     perf_long_df = build_binary_performance_long(
         task_name=landmark_name,
         results=results,
@@ -332,7 +784,6 @@ def run_experiment(landmark_name, seq_len):
         threshold_key="thr",
     )
 
-    tag = landmark_name.replace(" ", "_")[:4]
     best_eval_name = best_prauc_name
     best_eval = results[best_eval_name]
 
@@ -349,6 +800,8 @@ def run_experiment(landmark_name, seq_len):
     print(f"    AUC         = {metrics['auc']:.3f}  95% CI {format_ci(cis, 'auc')}")
     print(f"    PR-AUC      = {metrics['prauc']:.3f}  95% CI {format_ci(cis, 'prauc')}")
     print(f"    Brier       = {metrics['brier']:.3f}  95% CI {format_ci(cis, 'brier')}")
+    print(f"    Accuracy    = {metrics['acc']:.3f}")
+    print(f"    Bal. Acc    = {metrics['bacc']:.3f}")
     print(f"    Recall      = {metrics['recall']:.3f}  95% CI {format_ci(cis, 'recall')}")
     print(f"    Specificity = {metrics['specificity']:.3f}  95% CI {format_ci(cis, 'specificity')}")
     print(f"    Cal. Intcp  = {cal['intercept']:.3f}  95% CI {format_ci(cis, 'cal_intercept')}")
@@ -484,7 +937,7 @@ def main():
         Config.OUT_DIR / "Performance_Heatmaps.png",
         task_order=["3-Month", "6-Month"],
         domain_order=["Train_Fit", "Validation_OOF", "Test_Temporal"],
-        metric_order=["auc", "recall", "specificity", "f1"],
+        metric_order=["auc", "acc", "recall", "specificity", "f1"],
         title="Fixed Landmark Internal Performance Heatmaps",
     )
     print(f"\n  Done. Results in {Config.OUT_DIR.resolve()}")

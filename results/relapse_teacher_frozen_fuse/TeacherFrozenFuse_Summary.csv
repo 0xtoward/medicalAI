@@ -1,0 +1,12 @@
+Split,Task,Metric,Value
+Validation,FuseBest,AUC,0.868623450007848
+Validation,FuseBest,PR-AUC,0.37213450836726075
+Validation,FuseBest,F1,0.5185185185185185
+Validation,FuseBest,Threshold,0.1999999999999999
+Validation,FuseBest,BestExperiment,teacher_landmark_gate_raw__lr
+TemporalTest,FuseBest,AUC,0.7941009642654566
+TemporalTest,FuseBest,PR-AUC,0.349
+TemporalTest,FuseBest,F1,0.3146067415730337
+TemporalTest,FuseBest,Recall,0.34146341463414637
+TemporalTest,FuseBest,Specificity,0.9281183932346723
+TemporalTest,FuseBest,BestExperiment,teacher_landmark_gate_raw__lr

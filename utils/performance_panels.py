@@ -23,6 +23,8 @@ DOMAIN_LABELS = {
 METRIC_LABELS = {
     "auc": "AUC",
     "prauc": "PR-AUC",
+    "acc": "Accuracy",
+    "bacc": "Balanced Accuracy",
     "f1": "F1",
     "recall": "Sensitivity",
     "specificity": "Specificity",

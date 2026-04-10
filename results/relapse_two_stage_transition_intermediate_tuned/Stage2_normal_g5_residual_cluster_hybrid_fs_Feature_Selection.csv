@@ -1,0 +1,11 @@
+feature,coefficient,abs_coefficient,selected
+G5_ResidualPCA_PC2,,,True
+G5_ResidualPCA_PC3,,,True
+G5_ResidualPCA_PC4,,,True
+G5_ResidualPCA_ReconRMSE,,,True
+G5_ResidualArchetype_Prob_0,,,True
+G5_ResidualArchetype_Prob_1,,,True
+G5_ResidualArchetype_Dist_1,,,True
+G5_ResidualArchetype_Prob_2,,,True
+G5_ResidualArchetype_Dist_2,,,True
+G5_ResidualArchetype_SoftDist_3,,,True

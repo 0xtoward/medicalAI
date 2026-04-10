@@ -1,0 +1,6 @@
+original_features=58
+selected_features=58
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=Sex, Age, Height, Weight, BMI, Exophthalmos, ThyroidW, RAI3d, TGAb, TPOAb, TRAb, Uptake24h, MaxUptake, HalfLife, Dose, Start_Time, Stop_Time, Interval_Width, Prior_Relapse_Count, Event_Order, FT3_Current, FT4_Current, logTSH_Current, FT3_Baseline, FT4_Baseline, logTSH_Baseline, FT3_Prev, FT4_Prev, logTSH_Prev, FT3_Mean_ToDate, FT4_Mean_ToDate, logTSH_Mean_ToDate, FT3_STD_ToDate, FT4_STD_ToDate, logTSH_STD_ToDate, Ever_Hyper_Before, Ever_Hypo_Before, Time_In_Normal, Delta_FT4_k0, Delta_TSH_k0, Delta_FT4_1step, Delta_TSH_1step, Interval_Name_12M->18M, Interval_Name_18M->24M, Interval_Name_1M->3M, Interval_Name_3M->6M, Interval_Name_6M->12M, Prev_State_0, Prev_State_1, Prev_State_2, Time_In_Normal_x_Interval_Name_3M->6M, Time_In_Normal_x_Interval_Name_6M->12M, FT3_Current_x_Interval_Name_1M->3M, FT3_Current_x_Interval_Name_3M->6M, FT3_Current_x_Interval_Name_6M->12M, Delta_TSH_k0_x_Interval_Name_1M->3M, Delta_TSH_k0_x_Interval_Name_3M->6M, Delta_TSH_k0_x_Interval_Name_6M->12M
+note=selected direct feature set + narrowed evidence-driven early-window interactions; candidate_core=Time_In_Normal,FT3_Current,Delta_TSH_k0,FT4_Current,FT4_Mean_ToDate,logTSH_Mean_ToDate; interaction_core=Time_In_Normal,FT3_Current,Delta_TSH_k0

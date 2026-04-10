@@ -1,0 +1,6 @@
+key,title,description
+g1_delta_latent,Gen1 Delta Manifold,continuous physiology forecast geometry only; no state/rule target proxy
+g2_pca_manifold,Gen2 PCA Manifold,compressed low-dimensional manifold of stage-1 continuous forecasts
+g3_cluster_soft_state,Gen3 Soft Archetypes,unsupervised physiology archetype memberships from predicted future labs
+g4_residual_pca,Gen4 Residual Manifold,residualized future physiology after removing current-window context
+g5_residual_cluster_hybrid,Gen5 Residual Hybrid,residual manifold plus residual archetype memberships

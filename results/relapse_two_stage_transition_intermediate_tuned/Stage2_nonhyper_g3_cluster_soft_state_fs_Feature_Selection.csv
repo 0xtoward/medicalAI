@@ -1,0 +1,10 @@
+feature,coefficient,abs_coefficient,selected
+G3_Archetype_SoftDist_0,,,True
+G3_Archetype_Dist_0,,,True
+G3_Archetype_Prob_1,,,True
+G3_Archetype_SoftDist_1,,,True
+G3_Archetype_Prob_2,,,True
+G3_Archetype_Prob_3,,,True
+G3_Archetype_Prob_4,,,True
+G3_Archetype_SoftDist_4,,,True
+G3_Archetype_MaxProb,,,True

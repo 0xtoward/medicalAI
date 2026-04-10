@@ -1,0 +1,8 @@
+feature,coefficient,abs_coefficient,selected
+G2_PCA_PC1,,,True
+G2_PCA_PC2,,,True
+G2_PCA_PC3,,,True
+G2_PCA_PC4,,,True
+G2_PCA_PC5,,,True
+G2_PCA_PC6,,,True
+G2_PCA_ReconRMSE,,,True

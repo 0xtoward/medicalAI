@@ -1,11 +1,11 @@
-"""Export deployable artifacts for the English Streamlit app."""
+"""Export deployable artifacts for the current Streamlit app."""
 
 from __future__ import annotations
 
 import argparse
 import json
 
-from thyroid_app.training import export_all_artifacts
+from thyroid_app.export_current_artifacts import export_all_artifacts
 
 
 def main() -> None:
@@ -19,4 +19,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

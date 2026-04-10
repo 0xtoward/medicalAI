@@ -24,22 +24,22 @@ RELAPSE_FEATURE_COLUMNS = STATIC_NAMES + [
 SERIES_NAMES = ["FT3", "FT4", "TSH"]
 
 STATIC_FIELD_HELP = {
-    "Sex": "0 = Female, 1 = Male",
-    "Age": "Years",
-    "Height": "cm",
-    "Weight": "kg",
-    "BMI": "kg/m^2",
-    "Exophthalmos": "0 = No, 1 = Yes",
-    "ThyroidW": "Thyroid weight / volume field from the source dataset",
-    "RAI3d": "3-day RAI-related field from the source dataset",
-    "TreatCount": "Prior treatment count",
-    "TGAb": "Thyroglobulin antibody",
-    "TPOAb": "Thyroid peroxidase antibody",
-    "TRAb": "Thyrotropin receptor antibody",
-    "Uptake24h": "24-hour uptake",
-    "MaxUptake": "Maximum uptake",
-    "HalfLife": "Effective half-life",
-    "Dose": "Administered RAI dose",
+    "Sex": "0 = 女性, 1 = 男性",
+    "Age": "单位：岁",
+    "Height": "单位：米",
+    "Weight": "单位：千克",
+    "BMI": "单位：kg/m^2",
+    "Exophthalmos": "0 = 无, 1 = 有",
+    "ThyroidW": "原始数据中的甲状腺重量/体积字段",
+    "RAI3d": "原始数据中的 3 日 RAI 相关字段",
+    "TreatCount": "既往治疗次数",
+    "TGAb": "甲状腺球蛋白抗体",
+    "TPOAb": "甲状腺过氧化物酶抗体",
+    "TRAb": "促甲状腺激素受体抗体",
+    "Uptake24h": "24 小时摄取率",
+    "MaxUptake": "最大摄取率",
+    "HalfLife": "有效半衰期",
+    "Dose": "放射性碘剂量",
 }
 
 STATIC_FIELD_RANGES = {

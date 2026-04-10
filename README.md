@@ -1,396 +1,333 @@
-# RAI 后 Graves 病程的固定 landmark 与 rolling landmark 建模
-## 以 two-stage 下一窗口复发预警为当前主线的真实世界纵向研究
+# 基于 Landmark 引导的局部-全局多头动态风险网络
+## 放射性碘治疗后 Graves 病复发动态预警研究
 
-## 一句话结论
-在当前队列中，最值得作为主结果的不是单次时点的状态识别，也不是更早期的“先预测未来化验值再接下游分类”的探索版，而是现在这条 **two-stage 下一窗口复发预警主线**：
+## 摘要
+本研究不再将随访预测理解为某个固定时间点的状态分类问题，也不再将其写成一个松散拼接的两阶段附属流程，而是将其形式化为一个**基于 landmark 的动态复发风险预测问题**。在每个随访时点 `t`，模型仅使用 `t` 时点及之前可获得的信息，更新患者在下一时间窗 `t -> t+1` 内发生复发的风险。
 
-> 先提取“下一次复诊会不会重新回到甲亢端”的转归信号，再和当前直接复发风险做透明融合。
+最终模型由三类信息共同驱动：静态临床背景、近期随访动态、全病程纵向轨迹；同时保留 `3M` 早期反应信号作为 **early-response landmark expert**，并引入下一状态预测头用于正则化时间表征。最终风险并非直接由一个不透明神经输出头给出，而是通过一个低维、冻结、可解释的逻辑回归融合层完成读出。
 
-对应主脚本：
-[`scripts/relapse_two_stage_transition.py`](./scripts/relapse_two_stage_transition.py)
+在当前评估框架下，最终模型达到：
 
-主结果目录：
-`results/relapse_two_stage_transition/`
+- 内部验证集：`AUC = 0.869`，`PR-AUC = 0.372`
+- 时间外推测试集：`AUC = 0.794`，`PR-AUC = 0.349`
 
-当前测试集上的主结果为：
+作为直接对照，较早的 dynamic-only 滚动 landmark 基线在时间外推测试集上达到：
 
-- `PR-AUC = 0.351`
-- `AUC = 0.849`
-- `Brier = 0.063`
+- `AUC = 0.762`，`PR-AUC = 0.283`
 
-作为对照，之前的 rolling landmark 直接模型：
-[`scripts/relapse.py`](./scripts/relapse.py)
-
-在同一测试框架下为：
-
-- `PR-AUC = 0.334`
-- `AUC = 0.841`
-- `Brier = 0.064`
-
-也就是说，当前 two-stage 主线是在已经可用的 direct baseline 基础上，再把少数复发事件的识别能力往前推了一小步。
+综上，landmark 引导、多头监督与透明融合读出共同构成了一个更完整的动态风险分层框架。与直接动态基线相比，该框架在稀有事件排序能力上更优，同时维持了可接受的时间外推泛化。
 
 ---
 
-## 研究框架总览
-这套工作不是几个脚本平铺摆放，而是围绕同一个临床问题逐层展开：
+## 1. 临床问题与方法定位
+本研究所回答的，不是“患者当前属于哪一种甲状腺功能状态”，也不是“能否先预测未来实验室指标，再交给下游分类器”。更准确的临床问题是：
 
-- 前导问题：在固定时点，患者当前是否仍处于甲亢端
-- baseline 问题：当前已经恢复 `Normal` 的患者，下一窗口会不会重新回到 `Hyper`
-- 当前主线：在 direct baseline 之上，再补上一条下一窗口转归信号
+> 在每个随访 landmark `t`，仅使用 `t` 时点之前的可得信息，更新患者在下一个随访区间 `t -> t+1` 中发生复发的风险。
 
-![研究框架总览](methodology.png)
+这种表述的意义在于，它更贴近真实临床随访。患者风险并不是一个固定不变的终身标签，而是随着治疗反应、甲状腺功能轨迹、既往波动历史和后续监测信息不断被修正的动态量。
 
-当前 README 主文只保留三条主线：
+在这一框架下，`3M` 分支不被解释为“通用患者编码器”，而被定义为**早期治疗反应的 landmark 专家分支**：
 
-| 脚本 | 角色 | 主要输出目录 |
-| --- | --- | --- |
-| [`scripts/fixed_landmark_binary.py`](./scripts/fixed_landmark_binary.py) | 前导分析：固定 `3M / 6M` 二分类 | `results/fixed_landmark_binary/` |
-| [`scripts/relapse.py`](./scripts/relapse.py) | baseline：rolling landmark 直接复发预警 | `results/relapse/` |
-| [`scripts/relapse_two_stage_transition.py`](./scripts/relapse_two_stage_transition.py) | 当前主线：two-stage 下一窗口复发预警 | `results/relapse_two_stage_transition/` |
+- 在 `3M` 之前，模型利用已有历史去预判患者将进入怎样的早期反应状态；
+- 在 `3M` 及之后，模型利用已经观测到的 `3M` 信息，继续修正后续复发风险。
 
-其余结果统一放到本文末尾附录：
-
-- [`scripts/relapse_recurrent_survival.py`](./scripts/relapse_recurrent_survival.py)
-- [`scripts/relapse_two_stage_physio.py`](./scripts/relapse_two_stage_physio.py)
-- [`scripts/fixed_landmark_multiclass.py`](./scripts/fixed_landmark_multiclass.py)
+这也是当前方法与旧式“把一个固定时间点分类器硬塞进主模型”之间最关键的区别。这里保留 `3M`，不是因为它代表某种抽象 hidden truth，而是因为它在临床上对应的是**早期治疗反应状态**，在方法上对应的是**动态风险分层中的一个关键 landmark**。
 
 ---
 
-## 数据与验证框架
-### 队列概况
+## 2. 队列、验证方案与泄漏控制
+### 2.1 队列概况
 
-- 总记录数：`1003`
-- 唯一患者数：`889`
-- 随访节点：`0M`、`1M`、`3M`、`6M`、`12M`、`18M`、`24M`
-- 输入信息包括：
-  - 人口学和基础疾病负荷
-  - `FT3 / FT4 / TSH` 随访轨迹
-  - 医生评估的 `Hyper / Normal / Hypo` 状态
+- 原始记录数：`1003`
+- 独立患者数：`889`
+- 预设随访 landmark：`0M`、`1M`、`3M`、`6M`、`12M`、`18M`、`24M`
+- 可用信息类型：
+  - 人口学与基线负担
+  - 连续随访 `FT3 / FT4 / TSH`
+  - 抗体、剂量、摄取相关指标
+  - 临床判定的 `Hyper / Normal / Hypo` 状态
 
-### 外层切分
+### 2.2 时间顺序切分
+本研究采用**按患者、按时间顺序**切分：
 
-所有主脚本共用同一外层验证逻辑：
+- 前 `80%` 患者：模型开发期
+- 后 `20%` 患者：时间外推测试集
+- 在开发期内部，再取最后 `15%` 患者作为内部验证集
 
-- 按患者首次出现顺序做 `80/20` 患者级顺序切分
-- 训练集：`711` 名患者 / `795` 条原始记录
-- 测试集：`178` 名患者 / `208` 条原始记录
+在最终 interval-level 数据集中，对应为：
 
-这意味着 README 里的主结果都来自 **时间顺序切分 + 患者级隔离**，而不是随机切分。
+- 训练拟合集：`1796` 个区间，`146` 个阳性，`529` 名患者
+- 内部验证集：`300` 个区间，`23` 个阳性，`97` 名患者
+- 时间外推测试集：`514` 个区间，`41` 个阳性，`159` 名患者
 
-### 防泄漏原则
+### 2.3 泄漏控制原则
+整个分析遵循五条硬约束：
 
-1. 先切分，再做任何预处理。
-2. 缺失值填补只在训练集拟合。
-3. 所有 fixed landmark 与 rolling landmark 输入都按当前时间深度截断。
-4. 内层模型选择统一使用患者级 `GroupKFold`。
-5. 分类阈值来自训练阶段的 OOF 预测，不在测试集上回调。
+1. 先按患者切分，再做任何预处理。
+2. 缺失值插补仅在开发期拟合。
+3. 所有动态特征只保留当前 landmark 及之前的信息，不暴露未来。
+4. 模型选择采用按患者分组的重采样。
+5. 时间外推测试集不参与阈值搜索，也不参与模型选择。
 
-### 基线特征表
+### 2.4 基线特征表
 ![基线特征表](results/cohort_summary/Baseline_Characteristics_Table.png)
 
-配套文件：
-`results/cohort_summary/Baseline_Characteristics_Table.csv`
+这张图的重要性在于三点：
 
-这张表先交代了三件事：
-
-- 队列本身存在真实世界临床异质性
-- 训练集与测试集并不是完全随机同分布
-- 后面的 fixed、rolling 和 two-stage 结果都建立在同一个共同起点之上
+- 队列本身具有明显的临床异质性；
+- 时间外推测试集不是一个简单的随机留出样本；
+- 因而所有主结果都必须在“真实时间漂移”而不是 IID 假设下解读。
 
 ---
 
-## 特征选择与重跑说明
-README 里的主结果不是“原始全特征直接建模”的分数，而是 **先在外层训练集内做特征选择，再把整条训练和测试流程重跑** 后得到的结果。
+## 3. 方法学框架
+当前模型并未直接采用最复杂的 GRU-D 或 MMoE 结构，但保留了原始构想中最关键的方法学要点：
 
-主线二分类任务统一使用：
+- 明确区分 `static / local / global` 三类信息；
+- 明确保留 `3M landmark` 监督；
+- 明确保留 `next-state` 辅助监督；
+- 最终部署层保持透明、低维、可解释。
 
-- `StandardScaler`
-- `L1 Logistic Regression`
-- `GroupKFold`
-- `PR-AUC` 作为内层选择指标
+### 3.1 三个输入分支
+#### 1. 静态分支（Static branch）
+- 编码相对稳定的背景信息，如性别、年龄、体格指标、抗体、摄取相关变量和剂量相关变量；
+- 表征患者相对稳定的基础风险底盘。
 
-这个设计的目的不是单纯把变量变少，而是为了保证：
+#### 2. 局部分支（Local branch）
+- 编码近期随访信息，包括当前 `FT3 / FT4 / TSH`、短期变化量、当前区间以及前一状态；
+- 表征短期活动性和近期不稳定性。
 
-- 变量筛选不偷看测试集
-- 不同模型共享同一份 train-only 特征子集
-- 解释图和最终测试分数对应的是同一版模型
+#### 3. 全局分支（Global branch）
+- 编码全病程工程化轨迹特征，如 `Time_In_Normal`、区间宽度、既往复发计数和高风险早期窗口交互项；
+- 表征纵向恢复组织结构和较长时间尺度上的病程模式。
 
-从几条主线反复保留下来的变量家族看，真正稳定的信号主要集中在：
+### 3.2 多头监督（Multi-head supervision）
+#### 1. 主风险读出流（Main deployed hazard stream）
+- 最终风险并非直接由黑盒神经网络输出；
+- 主体表征先生成受教师信号约束的风险表示，再通过冻结的低维逻辑回归层完成最终读出。
 
-- 当前激素水平，尤其是 `FT3 / FT4`
-- `TSH` 恢复方向和恢复幅度
-- 已经维持正常多久
-- 之前是否经历过异常状态
-- 当前所处的随访窗口
+#### 2. `3M landmark` 头
+- 将表征锚定在早期治疗反应状态上；
+- 防止动态模型在训练中丢失临床上有意义的早期反应信息。
 
-换句话说，本项目最稳定的预测信息并不是“背景信息堆得越多越好”，而是 **现在恢复得怎么样、恢复了多久、之前走过什么轨迹**。
+#### 3. `next-state` 头
+- 预测下一次随访状态；
+- 让共享时间表征保留病程演化信息，而不是仅围绕最终复发标签过拟合。
 
----
+### 3.3 主方法图
+![主方法图](m1.png)
 
-## 主结果
-### 1. Fixed landmark 二分类：先证明“当前状态”是可学的
-对应脚本：
-[`scripts/fixed_landmark_binary.py`](./scripts/fixed_landmark_binary.py)
+这张图是全文的主方法图。它将队列构建、时间安全开发流程、`static / global / local / landmark` 表征学习、多头监督、可解释输出以及最终 Web 应用入口纳入同一叙事框架，更符合本研究的真实方法学脉络。
 
-这一层先回答一个更基础的问题：
+### 3.4 为什么 `3M landmark` 头是合理的
+保留专门的 `3M landmark` 头，并不是为了让故事更好听，而是因为前期 fixed-landmark binary 分析已经证明：`3M` 时点本身就携带强、可学习、可复现的信号。
 
-> 在 `3M` 或 `6M` 这些固定时点，患者当前是不是仍处于甲亢端？
+![固定 landmark 性能热图](results/fixed_landmark_binary/Performance_Heatmaps.png)
 
-这一步不是最终临床问题，但它很重要，因为如果“当前状态”本身都难以识别，后面的 rolling landmark 和 two-stage 就没有基础。
+在 `3M` 时点，fixed-landmark binary 结果达到：
 
-![固定 landmark 二分类热图](results/fixed_landmark_binary/Performance_Heatmaps.png)
+- 最佳时间外推测试 `Accuracy = 0.813`，对应 `Elastic+LGBM Blend Routed`
+- 最佳时间外推测试 `AUC = 0.857`，对应 `Elastic+LGBM Blend`
+- 最佳时间外推测试 `F1 = 0.752`，对应 `Elastic+LGBM Blend Routed`
 
-从整体表现看：
+因此，保留 `3M` 分支的逻辑并不是“将一个二分类器神化为通用真相”，而是承认：早期治疗反应本身已经足够强，可以作为临床上有意义的方法学锚点，用来约束后续动态风险更新。
 
-- `3M` 时点已经可以得到稳定判别
-- `6M` 时点表现更强，说明到这一阶段“当前恢复得怎么样”已经有较高可学性
+![3M ROC 曲线](results/fixed_landmark_binary/ROC_3-Mo.png)
 
-以测试集为例：
-
-- `3M`：`Logistic Reg.` 的 `AUC = 0.838`，`Random Forest = 0.849`
-- `6M`：`Logistic Reg.` 的 `AUC = 0.898`，`Random Forest = 0.904`
-
-![6M ROC 曲线](results/fixed_landmark_binary/ROC_6-Mo.png)
-
-![6M 校准曲线](results/fixed_landmark_binary/Calibration_6-Mo.png)
-
-这一段最重要的结论不是“固定时点谁分数最高”，而是：
-
-> 当前状态识别本身是可学的，因此后面把问题推进到“下一窗口是否复发”是有地基的。
+`3M` ROC 曲线进一步说明，这一信号不是偶然存在的弱 side signal，而是当前多头动态风险框架能够成立的重要前提之一。
 
 ---
 
-### 2. Rolling landmark direct baseline：`Normal -> Hyper` 下一窗口复发预警
-对应脚本：
-[`scripts/relapse.py`](./scripts/relapse.py)
+## 4. 主要结果
+### 4.1 直接动态基线
+较早的 dynamic-only 滚动 landmark 基线仍然重要，因为它证明了：即使不引入 landmark-guided 多头结构，仅凭动态轨迹本身，这个“下一时间窗复发预警”任务也是可学习的。
 
-这是整个项目第一次把问题改写成真正贴近门诊管理的问题：
+在时间外推测试集上，该基线达到：
 
-> 当前已经恢复 `Normal` 的患者，下一次复诊时会不会重新回到 `Hyper`？
+- `AUC = 0.762`
+- `PR-AUC = 0.283`
+- `F1 = 0.294`
 
-这条线之所以重要，是因为它既是之前的主线，也是当前 two-stage 的直接 baseline。
+这说明本文并不是在解决一个不同的问题，而是在同一个任务定义下，进一步引入早期 landmark 约束、辅助监督和透明融合读出。
 
-#### 为什么这个问题值得单独建模
-![状态转移热图](results/relapse/Transition_Heatmaps.png)
+### 4.2 最终模型的判别能力
+![最终模型判别结果](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_FormalWinner_Discrimination.png)
 
-这张图可以直接读出几个临床上很关键的事实：
+最终模型表现为：
 
-- `0M -> 1M` 仍以 `Hyper` 为主，符合治疗早期演化
-- 从 `3M -> 6M` 开始，`Normal -> Normal` 明显增加，说明出现了一批“看起来已经稳定”的患者
-- 但 `Normal -> Hyper` 并没有消失，尤其在 `3M -> 6M` 和 `6M -> 12M` 仍持续出现
+- 训练拟合集：`AUC = 0.893`，`PR-AUC = 0.392`
+- 内部验证集：`AUC = 0.869`，`PR-AUC = 0.372`
+- 时间外推测试集：`AUC = 0.794`，`PR-AUC = 0.349`
 
-这也是为什么后面的主线问题不是“状态分类”，而是“恢复正常后下一步会不会反弹”。
+最重要的读法不是单看某一个点值，而是看到：时间外推测试集的 `PR-AUC` 仍然接近内部验证集水平，说明模型在稀有事件排序上的能力在时间漂移下没有完全崩掉。
 
-#### direct baseline 的主结果
-![direct baseline 模型比较](results/relapse/Model_Comparison_Bar.png)
+### 4.3 校准情况
+![时间外推校准图](results/relapse_teacher_frozen_fuse/Calibration_Temporal.png)
 
-在 `scripts/relapse.py` 的候选模型中，`Logistic Regression` 仍然是当前最均衡的 baseline：
+预测概率主要分布在临床上预期的低风险区间。在时间外推测试集实际覆盖到的概率范围内，校准总体可接受，未见明显的大尺度失真。
 
-- `PR-AUC = 0.334`
-- `AUC = 0.841`
-- `Brier = 0.064`
+### 4.4 决策曲线分析
+![时间外推 DCA](results/relapse_teacher_frozen_fuse/DCA_Temporal.png)
 
-它不是最复杂的模型，但在稀少复发事件场景里，少数事件识别与可解释性之间的平衡最好，因此继续作为后续 two-stage 的对照。
+在较低阈值概率范围内，模型相对 treat-all 与 treat-none 策略均表现出正向 net benefit。这更支持它被理解为**早期随访分诊工具**，而不是一个用于高阈值确认诊断的分类器。
 
-![direct baseline 校准](results/relapse/Calibration_Interval.png)
+### 4.5 阈值敏感性
+![阈值敏感性分析](results/relapse_teacher_frozen_fuse/Threshold_Sensitivity_Temporal.png)
 
-![患者级风险分层](results/relapse/Patient_Risk_Q1Q4.png)
+最终采用的操作阈值为 `0.20`。在这个阈值下，模型相对更偏向高特异度而不是高召回，更符合低患病率事件下的保守预警策略。
 
-这条 baseline 的意义可以用一句话概括：
+### 4.6 混淆矩阵
+![混淆矩阵](results/relapse_teacher_frozen_fuse/Confusion_Temporal.png)
 
-> 即使不引入第二阶段，只用当前状态和病程轨迹，也已经能得到一个清楚、可解释、可部署的复发预警工具。
+在该阈值下：
 
----
+- `Specificity = 0.928`
+- `Recall = 0.341`
+- `F1 = 0.315`
 
-### 3. 当前主线：two-stage relapse warning
-对应脚本：
-[`scripts/relapse_two_stage_transition.py`](./scripts/relapse_two_stage_transition.py)
+因此，这不是一个激进的阳性判定配置，更准确地说，它对应的是一个**高特异度的随访预警场景**。
 
-这里所谓 **two-stage**，用白话说，就是：
+### 4.7 患者级风险分层
+![患者级风险分层](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Patient_Risk_Q1Q4.png)
 
-> 先提取下一窗口转归信号，再和当前直接风险做透明融合。
-
-它不是先去“完整模拟未来每个化验值”，再把模拟结果一股脑塞进下游模型；它更像是在 direct baseline 上补一条更贴近临床问题的下一步转归信息。
-
-#### Stage 1 在做什么
-Stage 1 的重点不是把未来化验值预测到非常精确，而是给出一个回答下列问题的分数：
-
-> 这个患者在下一次复诊时，会不会重新掉回甲亢端？
-
-当前这一步的结果可以简要理解为：
-
-- 未来生理值预测平均测试 `R² = 0.072`
-- `next-hyper` 二分类头测试 `AUC = 0.826`
-- `next-hyper` 二分类头测试 `PR-AUC = 0.323`
-
-这说明 Stage 1 不是“高精度未来化验模拟器”，但已经足以产生一条有用的下一窗口转归信号。
-
-#### Stage 2 在做什么
-Stage 2 没有回到宽表拼接，也没有回到黑盒 stacking。
-
-当前最优路线做得很克制：
-
-- 保留了 `relapse.py` 那条 direct baseline 的主干
-- 只给少数关键变量增加了早期窗口交互
-- 再把经过早期/晚期轻度校正的下一窗口转归信号与之透明融合
-
-所以，这条主线的重点不是“做得更复杂”，而是 **在不牺牲可解释性的前提下，把真正有用的第二层信息补进来**。
-
-#### 两条最值得比较的线
-
-| 路线 | PR-AUC | AUC | Brier |
-| --- | ---: | ---: | ---: |
-| rolling landmark direct baseline | `0.334` | `0.841` | `0.064` |
-| 当前 two-stage 主线 | `0.351` | `0.849` | `0.063` |
-
-配套结果文件：
-
-- `results/relapse_two_stage_transition/TwoStageTransition_Best_Group_Summary.csv`
-- `results/relapse_two_stage_transition/TwoStageTransition_DeltaBootstrap.csv`
-- `results/relapse_two_stage_transition/TwoStageTransition_PerWindow_Metrics.csv`
-
-![two-stage 组间比较](results/relapse_two_stage_transition/TwoStageTransition_Group_Comparison.png)
-
-这张图最重要的信息不是“差了很多”，而是：
-
-- direct baseline 已经不弱
-- two-stage 不是换题，而是在同一个临床问题上继续精修
-- 最终提升主要体现在稀少复发事件识别，也就是 `PR-AUC`
-
-#### 提升主要发生在哪些窗口
-![分窗口 PR-AUC 比较](results/relapse_two_stage_transition/TwoStageTransition_PerWindow_PR_AUC_Comparison.png)
-
-当前主线的增益主要集中在：
-
-- `3M -> 6M`
-- `6M -> 12M`
-- `18M -> 24M`
-
-其中最有临床意义的仍然是早中期窗口，因为这正是门诊随访频率和复发管理最敏感的阶段。
-
-#### bootstrap 视角下，提升有多稳
-![PR-AUC 差值 bootstrap](results/relapse_two_stage_transition/TwoStageTransition_PR_AUC_Delta_Forest.png)
-
-相对 direct baseline：
-
-- `ΔPR-AUC = +0.021`
-- `95% CI = +0.005 到 +0.040`
-
-这意味着：
-
-> 相对 direct 主干，这条 two-stage 主线带来的提升是明确的。
-
-#### 校准与临床可用性
-![two-stage interval 校准](results/relapse_two_stage_transition/TwoStageTransition_BestMode_Calibration_Interval.png)
-
-![two-stage 患者级风险分层](results/relapse_two_stage_transition/TwoStageTransition_BestMode_Patient_Risk_Q1Q4.png)
-
-从 interval-level 校准和 patient-level 风险分层来看，这条模型的意义并不只是把分数再抬高一点，而是：
-
-- 风险输出仍然能用于随访沟通
-- 患者级高低风险层之间仍有可分离性
-- 改进集中在“当前看似正常、但下一步可能反弹”的那批患者
-
-所以这条主线最适合的理解方式是：
-
-> 它不是要替代临床判断，而是帮助把“看起来稳定但下一步可能反弹”的患者更早挑出来。
+按患者级四分位进行分层后，可以看到从 `Q1` 到 `Q4` 预测风险总体上升，最高四分位对应最高的观察到复发负担。中间两层并非完全单调，提示中等风险区间仍有一定排序不稳定性，但高风险尾部已经形成有意义的分离。
 
 ---
 
-## 附录
-### 附录 A：两阶段探索过程简述
-在当前主线定稿前，项目中还尝试过多条 two-stage 路线，包括：
+## 5. 模型解释
+### 5.1 最终融合层系数
+![最终融合层系数](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_FormalWinner_Coefficients.png)
 
-- 扩大 Stage 1 家族，比较不同的下一窗口二分类头
-- 直接增强 direct 分支，再看是否能稳定抬高总分
-- 将训练范围扩展到非甲亢状态样本
-- 尝试加入第二条更窄的规则型转归分数
+最终冻结逻辑回归融合层使用四个输入：
 
-中途曾得到一版较强的两阶段内部参照，但最终仍由当前 two-stage 主线略微超过。
+- `Teacher_Logit`
+- `Landmark_Signal`
+- `Gate_Static`
+- `Gate_Local`
 
-![早期 two-stage 探索比较](results/relapse_two_stage_physio/TwoStage_Group_Comparison.png)
+其系数结构为：
 
-![Stage 1 变体比较](results/relapse_two_stage_physio/Stage1Only_Group_Comparison.png)
+- `Teacher_Logit = +0.551`
+- `Gate_Static = +0.268`
+- `Gate_Local = -0.268`
+- `Landmark_Signal = +0.160`
 
-这一段探索的核心结论并不是“模型越多越好”，而是：
+这说明最终分数主要由教师信号派生的风险流驱动，再由分支门控模式进行方向性修正，并辅以 landmark 信号支持。换句话说，最终模型并不是随意拼接，而是在一个低维透明层中完成最后的风险整合。
 
-- 未来生理信息确实有价值
-- 但大规模扩展 Stage 1 家族、宽表拼接或加入过多额外分数，并不能稳定带来收益
-- 最终留下来的，是更克制、更透明的 two-stage 主线
+### 5.2 端到端特征层 SHAP
+![端到端 SHAP 总图](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_EndToEnd_SHAP.png)
 
----
+![端到端 SHAP 重要性条形图](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_EndToEnd_SHAP_Bar.png)
 
-### 附录 B：recurrent survival 尝试
-对应脚本：
-[`scripts/relapse_recurrent_survival.py`](./scripts/relapse_recurrent_survival.py)
+本文的主解释层采用的是**端到端 SHAP**，而不是仅解释最终融合层四个输入的读出层 SHAP。也就是说，这一层解释已经回到了工程化特征粒度。
 
-这条线的价值主要是方法学对照：如果把问题写成 recurrent-event 语言，结论会不会变？
+排名靠前的特征包括：
 
-![recurrent survival 模型比较](results/recurrent_survival/Model_Comparison_Bar.png)
+- `Global::Time_In_Normal`
+- `Global::FT3_Current_x_CoreWindow_1M->3M`
+- `Global::FT4_Current`
+- `Global::Interval_Width`
+- `Global::FT3_Current`
+- `Global::CoreWindow_1M->3M`
+- `Global::Ever_Hypo_Before`
+- `Local::Window_1M->3M`
 
-![recurrent survival 校准](results/recurrent_survival/Calibration_NextWindow.png)
+它们共同提示：当前模型主要读取的是**全病程恢复组织结构**和**早期窗口内的动态不稳定性**，而不是单纯依赖静态背景负担。
 
-这条线提示我们：
+### 5.3 个体级局部解释
+![端到端高风险个体解释](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_EndToEnd_SHAP_Local_HighRisk.png)
 
-- recurrent-event 视角并没有失效
-- 在方法学层面，它仍然能给出有竞争力的结果
-- 但对于“这次复诊后下一次复诊是否会反弹”的门诊问题，离散 visit-to-visit 预警仍然更直观，也更容易解释和部署
+高风险示例的主要抬升因素包括：处于正常状态的时间较短、landmark 信号偏高，以及甲状腺相关动态特征活跃。
 
-因此，recurrent survival 在仓库里保留为重要对照，但不作为当前 README 的主部署路线。
+![端到端低风险个体解释](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_EndToEnd_SHAP_Local_LowRisk.png)
 
----
-
-### 附录 C：fixed landmark 三分类
-对应脚本：
-[`scripts/fixed_landmark_multiclass.py`](./scripts/fixed_landmark_multiclass.py)
-
-三分类分析更适合作为“当前状态分流”的补充，而不是当前主线。
-
-![6M 三分类 ROC](results/fixed_landmark_multiclass/ROC_6-Mo.png)
-
-![6M 三分类混淆矩阵](results/fixed_landmark_multiclass/CM_6-Mo.png)
-
-这部分的意义主要在于：
-
-- 补充说明 `Hyper / Normal / Hypo` 三状态之间并非完全不可分
-- 证明固定时点状态分流是可学的
-- 但它回答的仍然是“现在是什么状态”，不是“下一步会不会复发”
+低风险示例则呈现出相反模式：正常状态维持更久、随访时点更靠后、纵向生化信号更稳定。
 
 ---
 
-## 复现说明
-### 主文三条主线
+## 6. 方法开发补充图
+下列图并非临床主解释图层，但它们记录了模型开发阶段的行为，因此作为补充结果予以保留。
 
-```bash
-python scripts/fixed_landmark_binary.py
-python scripts/relapse.py
-python scripts/relapse_two_stage_transition.py --clear-cache
-```
+### 6.1 Backbone 比较
+![Backbone 比较](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Backbone_Comparison.png)
 
-### 附录脚本
+这张图主要反映不同门控与主体结构变体在验证集上的筛选信号，属于方法开发轨迹，而不是最终临床结论。
 
-```bash
-python scripts/relapse_recurrent_survival.py
-python scripts/relapse_two_stage_physio.py --clear-cache
-python scripts/fixed_landmark_multiclass.py
-```
+### 6.2 Gate 比较
+![Gate 比较](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Gate_Comparison.png)
 
-### 轻量检查
+这张图展示了主要候选模型在 `static / local / global` 三路上的权重分配。最终入选方案更接近“以 local 为主、global 设下限”的模式，而不是完全由 global 主导。
 
-```bash
-python -m py_compile scripts/relapse_two_stage_transition.py
-python -m unittest tests/test_relapse_two_stage_transition.py
-```
+### 6.3 顶部实验比较
+![顶部实验比较](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Top_Experiment_Comparison.png)
 
-如果只想先看最关键的结果，建议按这个顺序打开：
+这张图比较了按验证集和时间外推测试 `PR-AUC` 排名前列的融合实验。它对于理解模型选择过程有价值，但不应被误读为最终解释层。
 
-1. `results/relapse/Model_Comparison_Bar.png`
-2. `results/relapse_two_stage_transition/TwoStageTransition_Group_Comparison.png`
-3. `results/relapse_two_stage_transition/TwoStageTransition_PerWindow_PR_AUC_Comparison.png`
-4. `results/relapse_two_stage_transition/TwoStageTransition_PR_AUC_Delta_Forest.png`
+---
 
-这样可以最快看清楚：
+## 7. 融合层 SHAP 补充结果
+融合层 SHAP 作为补充结果保留，但它本质上解释的是**最终读出层**，而不是特征工程层。
 
-- 固定 landmark 说明当前状态可学
-- `relapse.py` 给出直接 baseline
-- 当前 two-stage 主线在同一个临床问题上进一步提升了下一窗口复发识别
+### 7.1 Fuse-space SHAP 总图
+![Fuse-space SHAP 总图](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_SHAP.png)
+
+### 7.2 Fuse-space SHAP 重要性
+![Fuse-space SHAP 条形图](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_SHAP_Bar.png)
+
+从重要性排序看，最终低维读出主要由 `Teacher_Logit` 驱动，其后是 `Landmark_Signal`、`Gate_Static` 和 `Gate_Local`。这与冻结逻辑回归层的系数结构一致。
+
+### 7.3 Fuse-space 局部解释
+![Fuse-space 高风险示例](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_SHAP_Local_HighRisk.png)
+
+![Fuse-space 低风险示例](results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_SHAP_Local_LowRisk.png)
+
+这些局部解释更适合作为一致性检查，用来确认最终融合层是否按预期工作，而不是作为主要的临床特征归因结果。
+
+---
+
+## 8. 历史脉络与补充分析
+本文仍保留若干较早的分析线。它们不再定义当前的主叙事，但对理解方法演化过程仍有价值。
+
+### 8.1 早期方法学路线图
+![早期方法学路线图](methodology.png)
+
+这张较早的总览图记录了一个并行探索时期：fixed landmark、rolling landmark、recurrent-event 和 two-stage physiology 等多条路线曾同时推进。它不再代表最终方法摘要，但仍保留了当前方法所继承的几个关键骨架：时间安全预处理、以 landmark 为核心的临床 framing、患者级风险分层，以及最终 Web 应用落地。
+
+### 8.2 Fixed-landmark 证据
+fixed-landmark 分析目前主要作为前导证据存在：
+
+- `3M` 路由融合模型的时间外推测试 `Accuracy` 已超过 `0.81`
+- `6M` 最佳时间外推测试 `AUC` 已超过 `0.91`
+
+因此，它现在更像是支撑当前多头框架的一组证据，而不是研究的中心结果线。
+
+### 8.3 较早的转移 sidecar 路线
+较早的转移 sidecar 路线在历史上曾达到约 `0.298` 的时间外推测试 `PR-AUC`。它在方法学上仍有参考价值，但从监督结构、解释闭环和部署一致性来看，已不如当前多头框架自洽。
+
+### 8.4 Recurrent-survival 路线
+recurrent-survival 分析仍然是有价值的方法学对照，但它回答的是一个相关而不完全相同的问题，因此更适合作为相邻证据，而不是当前主部署 formulation。
+
+---
+
+## 9. 补充材料
+相关结果与图表集中存放于：
+
+- `results/relapse_teacher_frozen_fuse/`
+
+主要包括：
+
+- 最终模型包与元数据
+- 判别、校准、DCA、阈值与混淆矩阵图
+- 端到端 SHAP 结果
+- 开发阶段比较图
+
+如果按照技术报告的阅读顺序，最值得优先阅读的是：
+
+1. 主方法图
+2. 判别结果
+3. 校准图
+4. 决策曲线分析
+5. 患者级风险分层
+6. 端到端 SHAP
+
+这六层合在一起，构成了当前主模型在临床意义、统计性能和解释层面的完整闭环。

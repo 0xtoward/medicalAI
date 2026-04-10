@@ -1,0 +1,6 @@
+original_features=5
+selected_features=5
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=G4_ResidualPCA_PC1, G4_ResidualPCA_PC2, G4_ResidualPCA_PC3, G4_ResidualPCA_PC4, G4_ResidualPCA_ReconRMSE
+note=targeted refit for g4_n; feature_selection=False

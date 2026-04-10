@@ -13,6 +13,7 @@ os.environ["PYTHONWARNINGS"] = "ignore"
 warnings.filterwarnings("ignore")
 
 import matplotlib.pyplot as plt
+import joblib
 import numpy as np
 import pandas as pd
 from imblearn.ensemble import BalancedRandomForestClassifier
@@ -76,6 +77,7 @@ from utils.plot_style import (
     apply_publication_style,
 )
 from utils.recurrence import derive_recurrent_survival_data
+from thyroid_app.features import make_relapse_features
 
 apply_publication_style()
 np.random.seed(SEED)
@@ -1371,13 +1373,57 @@ def save_anchor_champion_comparison(summary_df):
     plt.close(fig)
 
 
-def save_per_window_pr_auc_comparison(per_window_df, reference_group, best_group):
-    order = [f"{TIME_STAMPS[idx]}->{TIME_STAMPS[idx + 1]}" for idx in range(len(TIME_STAMPS) - 1)]
-    ref = (
-        per_window_df[per_window_df["Group"] == reference_group][["Interval_Name", "PR_AUC"]]
-        .rename(columns={"PR_AUC": "Reference_PR_AUC"})
-        .set_index("Interval_Name")
+def load_relapse_py_baseline_per_window(test_df):
+    candidate_paths = [
+        ROOT / "artifacts" / "relapse_direct" / "bundle.joblib",
+        ROOT / "artifacts" / "relapse" / "bundle.joblib",
+    ]
+    bundle = None
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        loaded = joblib.load(path)
+        if loaded.get("task") == "relapse_direct":
+            bundle = loaded
+            break
+    if bundle is None:
+        return None
+
+    x_ref = make_relapse_features(
+        test_df,
+        bundle["interval_categories"],
+        bundle["prev_state_categories"],
     )
+    proba = bundle["model"].predict_proba(x_ref)[:, 1]
+    rows = []
+    for interval_name, subset in test_df.groupby("Interval_Name", sort=False):
+        idx = subset.index.to_numpy()
+        y_true = subset["Y_Relapse"].values.astype(int)
+        if len(y_true) == 0:
+            continue
+        rows.append(
+            {
+                "Interval_Name": str(interval_name),
+                "PR_AUC": average_precision_score(y_true, proba[idx]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def save_per_window_pr_auc_comparison(per_window_df, reference_group, best_group, external_reference_df=None, reference_label="Rolling landmark baseline"):
+    order = [f"{TIME_STAMPS[idx]}->{TIME_STAMPS[idx + 1]}" for idx in range(len(TIME_STAMPS) - 1)]
+    if external_reference_df is None:
+        ref = (
+            per_window_df[per_window_df["Group"] == reference_group][["Interval_Name", "PR_AUC"]]
+            .rename(columns={"PR_AUC": "Reference_PR_AUC"})
+            .set_index("Interval_Name")
+        )
+    else:
+        ref = (
+            external_reference_df[["Interval_Name", "PR_AUC"]]
+            .rename(columns={"PR_AUC": "Reference_PR_AUC"})
+            .set_index("Interval_Name")
+        )
     best = (
         per_window_df[per_window_df["Group"] == best_group][["Interval_Name", "PR_AUC"]]
         .rename(columns={"PR_AUC": "Best_PR_AUC"})
@@ -1385,9 +1431,16 @@ def save_per_window_pr_auc_comparison(per_window_df, reference_group, best_group
     )
     plot_df = ref.join(best, how="outer").reindex(order).reset_index()
     fig, ax = plt.subplots(figsize=(8.8, 4.6))
-    ax.plot(plot_df["Interval_Name"], plot_df["Reference_PR_AUC"], marker="o", lw=2.0, color=PRIMARY_BLUE, label="Current champion")
+    ax.plot(
+        plot_df["Interval_Name"],
+        plot_df["Reference_PR_AUC"],
+        marker="o",
+        lw=2.0,
+        color=PRIMARY_BLUE,
+        label=reference_label,
+    )
     ax.plot(plot_df["Interval_Name"], plot_df["Best_PR_AUC"], marker="o", lw=2.0, color=PRIMARY_TEAL, label="Optimized two-stage")
-    ax.set_title("Per-window PR-AUC: current champion vs optimized two-stage", fontsize=9)
+    ax.set_title(f"Per-window PR-AUC: {reference_label} vs optimized two-stage", fontsize=9)
     ax.set_ylabel("PR-AUC")
     ax.set_xlabel("")
     ax.grid(axis="y", alpha=0.25)
@@ -1980,8 +2033,15 @@ def main():
     )
     best_mode = max(best_groups, key=lambda name: (best_groups[name][1]["metrics"]["prauc"], best_groups[name][1]["metrics"]["auc"]))
     best_name, best_payload = best_groups[best_mode]
+    relapse_py_window_df = load_relapse_py_baseline_per_window(df_test_pred)
     save_anchor_champion_comparison(summary_df)
-    save_per_window_pr_auc_comparison(per_window_df, "current_champion_ref", best_mode)
+    save_per_window_pr_auc_comparison(
+        per_window_df,
+        "direct_anchor_ref",
+        best_mode,
+        external_reference_df=relapse_py_window_df,
+        reference_label="relapse.py baseline" if relapse_py_window_df is not None else "Rolling landmark baseline",
+    )
     save_pr_auc_delta_forest(delta_boot_df, baseline_name="current_champion_ref")
     save_best_mode_reports_prefixed(f"{RESULT_PREFIX}_BestMode", best_mode, best_payload, df_train_pred, df_test_pred)
     if best_name in {"Logistic Reg.", "Elastic LR"}:

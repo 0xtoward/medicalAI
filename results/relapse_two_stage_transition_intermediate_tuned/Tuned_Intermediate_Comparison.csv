@@ -1,0 +1,3 @@
+Reference,Group,PR_AUC,AUC,Delta_PR_AUC_vs_Current,Delta_AUC_vs_Current
+previous_intermediate_best,baseline_windowed_plus_champion_cal,0.3512269429351875,0.8487082968081268,0.00017225753910599106,-0.0005672149744754273
+transition_best,direct_windowed_core_plus_champion_calibrated,0.3512269429351875,0.8487082968081268,0.00017225753910599106,-0.0005672149744754273

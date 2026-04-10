@@ -1,0 +1,6 @@
+original_features=36
+selected_features=36
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=Sex, Age, Height, Exophthalmos, ThyroidW, RAI3d, TGAb, TPOAb, Uptake24h, MaxUptake, HalfLife, Dose, Start_Time, Stop_Time, Prior_Relapse_Count, Event_Order, FT3_Current, FT4_Current, logTSH_Current, FT3_Baseline, logTSH_Baseline, FT3_Prev, FT3_Mean_ToDate, FT4_Mean_ToDate, logTSH_Mean_ToDate, FT3_STD_ToDate, logTSH_STD_ToDate, Ever_Hyper_Before, Ever_Hypo_Before, Time_In_Normal, Delta_TSH_k0, Delta_TSH_1step, Interval_Name_12M->18M, Interval_Name_1M->3M, Interval_Name_6M->12M, Prev_State_2
+note=selected direct features + partial monotone constraints

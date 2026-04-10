@@ -1,0 +1,8 @@
+feature,coefficient,abs_coefficient,selected
+committee_g234_SpreadProb,,,True
+g2_nh_x_g3_n,,,True
+g2_nh_x_g4_nh,,,True
+g2_nh_minus_g4_nh,,,True
+Window_18M->24M_x_g2_nh_Logit,,,True
+Window_1M->3M_x_g2_nh_Logit,,,True
+Window_6M->12M_x_g3_n_Logit,,,True

@@ -1,0 +1,11 @@
+feature,coefficient,abs_coefficient,selected
+committee_g2344_Prob,,,True
+fusion_committee_g2344_StdLogit,,,True
+Direct_minus_committee_g2344,,,True
+Window_18M->24M_x_Direct_Logit,,,True
+Window_1M->3M_x_Direct_Logit,,,True
+Window_1M->3M_x_committee_g2344_Logit,,,True
+Window_3M->6M_x_Champion_Logit,,,True
+Window_3M->6M_x_Direct_Logit,,,True
+Window_6M->12M,,,True
+fusion_committee_g2344_Direct_x_LatentMean,,,True

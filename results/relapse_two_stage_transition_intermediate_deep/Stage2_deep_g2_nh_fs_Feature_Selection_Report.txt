@@ -1,0 +1,6 @@
+original_features=7
+selected_features=7
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=G2_PCA_PC1, G2_PCA_PC2, G2_PCA_PC3, G2_PCA_PC4, G2_PCA_PC5, G2_PCA_PC6, G2_PCA_ReconRMSE
+note=targeted refit for g2_nh; feature_selection=True

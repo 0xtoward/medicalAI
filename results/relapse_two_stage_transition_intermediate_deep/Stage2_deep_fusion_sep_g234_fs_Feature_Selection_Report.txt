@@ -1,0 +1,6 @@
+original_features=12
+selected_features=12
+best_c=NA_fixed
+cv_pr_auc=NA_fixed
+selected_feature_names=g2_nh_Logit, fusion_sep_g234_StdLogit, fusion_sep_g234_MaxProb, Champion_minus_Direct, Champion_minus_g2_nh, Direct_x_g2_nh, Direct_x_g4_nh, g2_nh_minus_g4_nh, Window_1M->3M_x_Direct_Logit, Window_1M->3M_x_g4_nh_Logit, Window_3M->6M_x_g4_nh_Logit, fusion_sep_g234_Direct_x_LatentMean
+note=multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh; feature_selection=True
