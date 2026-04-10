@@ -1,0 +1,37 @@
+Patient_ID,Event_Index,Lead_Windows,Category
+210309,2,,missed
+210315,1,,missed
+210318,1,,missed
+210401,0,0.0,same window
+210402,1,,missed
+210417,1,1.0,1 window early
+210422,0,0.0,same window
+210426,2,,missed
+210433,0,0.0,same window
+210441,0,,missed
+210446,0,0.0,same window
+210463,0,,missed
+210505,1,,missed
+210514,1,,missed
+210529,0,0.0,same window
+210603,1,,missed
+210604,0,,missed
+210612,0,0.0,same window
+210619,0,,missed
+210621,0,0.0,same window
+210624,0,,missed
+210714,0,,missed
+210718,0,,missed
+210720,1,,missed
+210741,0,-1.0,missed
+210749,0,-1.0,missed
+210750,0,0.0,same window
+210752,0,0.0,same window
+210813,0,0.0,same window
+210817,0,0.0,same window
+210825,0,,missed
+210850,0,-1.0,missed
+210901,0,,missed
+210909,0,0.0,same window
+210924,0,,missed
+210930,0,,missed

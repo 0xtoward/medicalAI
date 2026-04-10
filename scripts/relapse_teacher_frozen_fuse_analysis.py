@@ -2,6 +2,7 @@ import os
 import sys
 import pickle
 import json
+import argparse
 import warnings
 from pathlib import Path
 
@@ -17,11 +18,13 @@ import numpy as np
 import pandas as pd
 import scipy.integrate
 import torch
+import joblib
 
 if not hasattr(scipy.integrate, "trapz"):
     scipy.integrate.trapz = scipy.integrate.trapezoid
 
 from scripts import relapse_teacher_frozen_fuse as tf
+from thyroid_app.features import make_relapse_features
 from utils.config import SEED
 from utils.evaluation import aggregate_patient_level, save_patient_risk_strata
 from utils.plot_style import apply_publication_style
@@ -31,6 +34,8 @@ apply_publication_style()
 
 
 OUT_DIR = tf.Config.OUT_DIR
+FORMAL_THRESHOLD = 0.20
+INTERVAL_ORDER = ["1M->3M", "3M->6M", "6M->12M", "12M->18M", "18M->24M"]
 
 
 def load_best_artifacts():
@@ -40,6 +45,26 @@ def load_best_artifacts():
     with open(OUT_DIR / "Best_Frozen_Fuse.pkl", "rb") as f:
         best_fuse = pickle.load(f)
     return best_summary, fuse_df, backbone_df, best_fuse
+
+
+def load_formal_winner_bundle():
+    with open(OUT_DIR / "TeacherFrozenFuse_FormalWinner.pkl", "rb") as f:
+        return pickle.load(f)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Posthoc analysis for the formal winner teacher-frozen fuse model.")
+    parser.add_argument(
+        "--load-pkl",
+        action="store_true",
+        help="Load the existing TeacherFrozenFuse_FormalWinner.pkl instead of rehydrating the sweep winner object.",
+    )
+    parser.add_argument(
+        "--skip-shap",
+        action="store_true",
+        help="Skip SHAP regeneration and reuse existing interpretation outputs when only patient-level figures are needed.",
+    )
+    return parser.parse_args()
 
 
 def rebuild_data():
@@ -166,6 +191,414 @@ def attach_landmark_meta(fit_frame, val_frame, te_frame, df_fit, df_val, df_te, 
     val_frame["Meta::LandmarkObsValue"] = val_ds.y_landmark.numpy()
     te_frame["Meta::LandmarkObsValue"] = te_ds.y_landmark.numpy()
     return fit_frame, val_frame, te_frame
+
+
+def _align_feature_frame(frame, feature_names, medians=None):
+    out = frame.copy()
+    out = out.replace([np.inf, -np.inf], np.nan)
+    out = out.reindex(columns=list(feature_names), fill_value=np.nan)
+    if medians is not None:
+        med = pd.Series(medians, dtype=float)
+        out = out.fillna(med)
+    else:
+        out = out.fillna(0.0)
+    return out.astype(float)
+
+
+def load_direct_baseline_bundle():
+    return joblib.load("artifacts/relapse_direct/bundle.joblib")
+
+
+def compute_direct_baseline_predictions(df_fit, df_te):
+    bundle = load_direct_baseline_bundle()
+    x_fit = make_relapse_features(df_fit, bundle["interval_categories"], bundle["prev_state_categories"])
+    x_te = make_relapse_features(df_te, bundle["interval_categories"], bundle["prev_state_categories"])
+    x_fit = _align_feature_frame(x_fit, bundle["feature_names"], bundle.get("feature_medians"))
+    x_te = _align_feature_frame(x_te, bundle["feature_names"], bundle.get("feature_medians"))
+    fit_proba = bundle["model"].predict_proba(x_fit)[:, 1]
+    te_proba = bundle["model"].predict_proba(x_te)[:, 1]
+    return bundle, fit_proba, te_proba
+
+
+def _wilson_ci(k, n, z=1.959963984540054):
+    if n <= 0:
+        return np.nan, np.nan
+    phat = k / n
+    denom = 1 + z**2 / n
+    center = (phat + z**2 / (2 * n)) / denom
+    radius = z * np.sqrt((phat * (1 - phat) + z**2 / (4 * n)) / n) / denom
+    return max(0.0, center - radius), min(1.0, center + radius)
+
+
+def _assign_patient_quartiles(patient_df, train_patient_df):
+    bins = np.quantile(train_patient_df["proba"].values, [0, 0.25, 0.5, 0.75, 1.0])
+    bins[0] = min(bins[0], 0.0)
+    bins[-1] = max(bins[-1], 1.0)
+    for i in range(1, len(bins)):
+        if bins[i] <= bins[i - 1]:
+            bins[i] = bins[i - 1] + 1e-6
+    out = patient_df.copy()
+    out["Risk_Group"] = pd.cut(out["proba"], bins=bins, include_lowest=True, labels=["Q1", "Q2", "Q3", "Q4"]).astype(str)
+    return out, bins
+
+
+def build_patient_level_outputs(df_fit, df_te, fit_proba, te_proba, save_outputs=True, prefix="TeacherFrozenFuse"):
+    patient_fit = aggregate_patient_level(df_fit, fit_proba, method="product")
+    patient_te = aggregate_patient_level(df_te, te_proba, method="product")
+    patient_te, bins = _assign_patient_quartiles(patient_te, patient_fit)
+    patient_fit, _ = _assign_patient_quartiles(patient_fit, patient_fit)
+    patient_fit["Split"] = "Fit"
+    patient_te["Split"] = "TemporalTest"
+    if save_outputs:
+        patient_fit.to_csv(OUT_DIR / f"{prefix}_PatientLevel_Train.csv", index=False)
+        patient_te.to_csv(OUT_DIR / f"{prefix}_PatientLevel_Test.csv", index=False)
+    return patient_fit, patient_te, bins
+
+
+def load_temporal_prediction_table():
+    path = OUT_DIR / "TemporalTest_Predictions.csv"
+    if not path.exists():
+        return None
+    return pd.read_csv(path)
+
+
+def plot_patient_waterfall(patient_te, bins):
+    plot_df = patient_te.sort_values("proba", ascending=False).reset_index(drop=True).copy()
+    plot_df["Rank"] = np.arange(1, len(plot_df) + 1)
+    plot_df.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Waterfall.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(14.5, 5.8))
+    colors = np.where(plot_df["Y"].values == 1, "#dc2626", "#2563eb")
+    ax.bar(plot_df["Rank"], plot_df["proba"], color=colors, width=0.92, edgecolor="none")
+    ax.axhline(FORMAL_THRESHOLD, color="#111827", linestyle="--", lw=1.3, label="Interval threshold = 0.20")
+
+    q_counts = plot_df["Risk_Group"].value_counts().reindex(["Q4", "Q3", "Q2", "Q1"]).fillna(0).astype(int)
+    cursor = 0
+    for label, count in q_counts.items():
+        cursor += count
+        if cursor < len(plot_df):
+            ax.axvline(cursor + 0.5, color="#9ca3af", linestyle=":", lw=1)
+
+    ax.set_title("Patient-Level Cumulative Risk Waterfall")
+    ax.set_xlabel("Patients ranked by cumulative risk")
+    ax.set_ylabel("Patient-level cumulative risk")
+    ax.set_xlim(0.5, len(plot_df) + 0.5)
+    ax.set_ylim(0, min(1.0, float(plot_df["proba"].max()) + 0.08))
+    ax.set_xticks([])
+    ax.grid(axis="y", alpha=0.25)
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color="#dc2626", label="Observed relapse"),
+        plt.Rectangle((0, 0), 1, 1, color="#2563eb", label="No observed relapse"),
+    ]
+    ax.legend(handles=handles + [ax.lines[0]], frameon=False, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Waterfall.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_patient_risk_heatmap(df_te, te_proba, patient_te):
+    tmp = df_te[["Patient_ID", "Interval_Name", "Y_Relapse"]].copy()
+    tmp["FuseBest_Prob"] = te_proba
+    pivot = (
+        tmp.groupby(["Patient_ID", "Interval_Name"], as_index=False)
+        .agg(FuseBest_Prob=("FuseBest_Prob", "mean"), Y_Relapse=("Y_Relapse", "max"))
+        .pivot(index="Patient_ID", columns="Interval_Name", values="FuseBest_Prob")
+        .reindex(columns=INTERVAL_ORDER)
+    )
+    ordered_ids = patient_te.sort_values("proba", ascending=False)["Patient_ID"].tolist()
+    pivot = pivot.reindex(ordered_ids)
+    pivot.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Heatmap.csv")
+
+    cmap = plt.cm.YlOrRd.copy()
+    cmap.set_bad("#e5e7eb")
+    fig_h = max(7.0, min(24.0, 0.10 * len(pivot) + 2.5))
+    fig, ax = plt.subplots(figsize=(9.0, fig_h))
+    im = ax.imshow(pivot.values, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=max(0.35, np.nanmax(pivot.values)))
+    ax.set_title("Patient-by-Window Risk Heatmap")
+    ax.set_xlabel("Follow-up window")
+    ax.set_ylabel("Patients ranked by cumulative risk")
+    ax.set_xticks(np.arange(len(pivot.columns)))
+    ax.set_xticklabels(pivot.columns, rotation=20, ha="right")
+    if len(pivot) <= 25:
+        ax.set_yticks(np.arange(len(pivot.index)))
+        ax.set_yticklabels([str(x) for x in pivot.index])
+    else:
+        ax.set_yticks([])
+    cbar = fig.colorbar(im, ax=ax, fraction=0.028, pad=0.02)
+    cbar.set_label("Interval relapse risk")
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Heatmap.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def select_typical_patients(patient_te):
+    positive = patient_te[patient_te["Y"] == 1].copy()
+    negative = patient_te[patient_te["Y"] == 0].copy()
+    high_risk_tp = positive.sort_values("proba", ascending=False).iloc[0]
+    low_risk_tn = negative.sort_values("proba", ascending=True).iloc[0]
+
+    remaining = patient_te.loc[~patient_te["Patient_ID"].isin([high_risk_tp["Patient_ID"], low_risk_tn["Patient_ID"]])].copy()
+    remaining["BoundaryGap"] = np.abs(remaining["proba"] - FORMAL_THRESHOLD)
+    boundary = remaining.sort_values(["BoundaryGap", "proba"], ascending=[True, True]).iloc[0]
+
+    out = pd.DataFrame(
+        [
+            {"Case_Type": "高风险真阳性", **high_risk_tp.to_dict()},
+            {"Case_Type": "低风险真阴性", **low_risk_tn.to_dict()},
+            {"Case_Type": "边界病例", **boundary.to_dict()},
+        ]
+    )
+    out.to_csv(OUT_DIR / "TeacherFrozenFuse_TypicalPatients.csv", index=False)
+    return out
+
+
+def plot_typical_patients(df_te, te_pred_df, typical_df):
+    te_long = df_te[["Patient_ID", "Interval_Name", "Start_Time", "Stop_Time", "FT3_Current", "FT4_Current", "logTSH_Current", "Y_Relapse"]].copy().reset_index(drop=True)
+    pred_cols = ["TeacherHead_Prob", "Landmark_Signal", "FuseBest_Prob"]
+    if len(te_pred_df) == len(te_long):
+        merged = te_long.copy()
+        merged[pred_cols] = te_pred_df[pred_cols].reset_index(drop=True)
+    else:
+        merged = te_long.merge(
+            te_pred_df[
+                [
+                    "Patient_ID",
+                    "Interval_Name",
+                    "TeacherHead_Prob",
+                    "Landmark_Signal",
+                    "FuseBest_Prob",
+                ]
+            ],
+            on=["Patient_ID", "Interval_Name"],
+            how="left",
+        )
+    merged["TSH_Current"] = np.expm1(merged["logTSH_Current"].astype(float)).clip(lower=0.0)
+
+    fig, axes = plt.subplots(len(typical_df), 2, figsize=(15.5, 4.4 * len(typical_df)))
+    if len(typical_df) == 1:
+        axes = np.asarray([axes])
+
+    for row_idx, (_, case_row) in enumerate(typical_df.iterrows()):
+        pid = case_row["Patient_ID"]
+        sub = (
+            merged[merged["Patient_ID"] == pid]
+            .groupby(["Interval_Name", "Start_Time", "Stop_Time"], as_index=False)
+            .agg(
+                FT3_Current=("FT3_Current", "mean"),
+                FT4_Current=("FT4_Current", "mean"),
+                TSH_Current=("TSH_Current", "mean"),
+                TeacherHead_Prob=("TeacherHead_Prob", "mean"),
+                Landmark_Signal=("Landmark_Signal", "mean"),
+                FuseBest_Prob=("FuseBest_Prob", "mean"),
+                Y_Relapse=("Y_Relapse", "max"),
+            )
+            .sort_values("Start_Time")
+        )
+        x = np.arange(len(sub))
+        x_labels = sub["Interval_Name"].tolist()
+
+        ax_l = axes[row_idx, 0]
+        ax_l.plot(x, sub["FT3_Current"], marker="o", color="#2563eb", label="FT3")
+        ax_l.plot(x, sub["FT4_Current"], marker="s", color="#16a34a", label="FT4")
+        ax_l.set_xticks(x)
+        ax_l.set_xticklabels(x_labels, rotation=20, ha="right")
+        ax_l.set_ylabel("FT3 / FT4")
+        ax_l.grid(alpha=0.25)
+        ax_l2 = ax_l.twinx()
+        ax_l2.plot(x, sub["TSH_Current"], marker="^", color="#dc2626", label="TSH")
+        ax_l2.set_ylabel("TSH")
+        event_idx = np.where(sub["Y_Relapse"].values.astype(int) == 1)[0]
+        for idx_event in event_idx:
+            ax_l.axvspan(idx_event - 0.35, idx_event + 0.35, color="#fecaca", alpha=0.5)
+        ax_l.set_title(f"{case_row['Case_Type']} | Patient {pid}")
+        lines1, labels1 = ax_l.get_legend_handles_labels()
+        lines2, labels2 = ax_l2.get_legend_handles_labels()
+        ax_l.legend(lines1 + lines2, labels1 + labels2, frameon=False, loc="upper left", ncol=3)
+
+        ax_r = axes[row_idx, 1]
+        ax_r.plot(x, sub["TeacherHead_Prob"], marker="o", color="#7c3aed", label="Teacher")
+        ax_r.plot(x, sub["Landmark_Signal"], marker="s", color="#ea580c", label="Landmark")
+        ax_r.plot(x, sub["FuseBest_Prob"], marker="D", color="#111827", label="Final risk")
+        ax_r.axhline(FORMAL_THRESHOLD, color="#6b7280", linestyle="--", lw=1.1, label="Threshold")
+        for idx_event in event_idx:
+            ax_r.axvspan(idx_event - 0.35, idx_event + 0.35, color="#fecaca", alpha=0.5)
+        ax_r.set_xticks(x)
+        ax_r.set_xticklabels(x_labels, rotation=20, ha="right")
+        ax_r.set_ylim(0, max(0.35, float(sub[["TeacherHead_Prob", "Landmark_Signal", "FuseBest_Prob"]].to_numpy().max()) + 0.08))
+        ax_r.set_ylabel("Predicted probability")
+        ax_r.set_title(f"Cumulative risk={case_row['proba']:.3f}")
+        ax_r.grid(alpha=0.25)
+        ax_r.legend(frameon=False, loc="upper left", ncol=2)
+
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_TypicalPatients.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_patient_q1q4_ci(patient_fit, patient_te):
+    _, bins = _assign_patient_quartiles(patient_fit, patient_fit)
+    strat_df = patient_te.copy()
+    strat_df["Risk_Group"] = pd.cut(strat_df["proba"], bins=bins, include_lowest=True, labels=["Q1", "Q2", "Q3", "Q4"]).astype(str)
+
+    rows = []
+    for grp in ["Q1", "Q2", "Q3", "Q4"]:
+        sub = strat_df[strat_df["Risk_Group"] == grp]
+        n = int(len(sub))
+        events = int(sub["Y"].sum())
+        observed = float(sub["Y"].mean()) if n else np.nan
+        pred = float(sub["proba"].mean()) if n else np.nan
+        low, high = _wilson_ci(events, n)
+        rows.append(
+            {
+                "Risk_Group": grp,
+                "N": n,
+                "Events": events,
+                "Observed": observed,
+                "Observed_CI_Low": low,
+                "Observed_CI_High": high,
+                "Predicted": pred,
+            }
+        )
+    summary = pd.DataFrame(rows)
+    summary.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Q1Q4_CI.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.4))
+    x = np.arange(len(summary))
+    yerr = np.vstack(
+        [
+            summary["Observed"] - summary["Observed_CI_Low"],
+            summary["Observed_CI_High"] - summary["Observed"],
+        ]
+    )
+    bars = ax.bar(x, summary["Observed"], color="#60a5fa", alpha=0.9, yerr=yerr, capsize=4, label="Observed relapse rate")
+    ax.plot(x, summary["Predicted"], marker="o", lw=2, color="#f59e0b", label="Mean predicted risk")
+    for xi, n in zip(x, summary["N"].tolist()):
+        ax.text(xi, float(summary.loc[xi, "Observed"]) + 0.03, f"n={n}", ha="center", fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels(summary["Risk_Group"])
+    ax.set_ylim(0, min(1.0, float(max(summary["Observed_CI_High"].max(), summary["Predicted"].max())) + 0.12))
+    ax.set_xlabel("Train-set quartile risk groups")
+    ax.set_ylabel("Patient-level relapse probability")
+    ax.set_title("Patient-Level Risk Stratification with 95% CI")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Q1Q4_CI.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_leadtime_warning(df_te, te_proba, patient_te):
+    tmp = df_te[["Patient_ID", "Interval_Name", "Start_Time", "Y_Relapse"]].copy()
+    tmp["FuseBest_Prob"] = te_proba
+    tmp = (
+        tmp.groupby(["Patient_ID", "Interval_Name", "Start_Time"], as_index=False)
+        .agg(FuseBest_Prob=("FuseBest_Prob", "mean"), Y_Relapse=("Y_Relapse", "max"))
+        .sort_values(["Patient_ID", "Start_Time"])
+    )
+    pos_ids = patient_te.loc[patient_te["Y"] == 1, "Patient_ID"].tolist()
+    tmp = tmp[tmp["Patient_ID"].isin(pos_ids)].copy()
+
+    records = []
+    for pid, g in tmp.groupby("Patient_ID", sort=False):
+        g = g.sort_values("Start_Time").reset_index(drop=True)
+        event_hits = np.where(g["Y_Relapse"].values.astype(int) == 1)[0]
+        if len(event_hits) == 0:
+            continue
+        event_idx = int(event_hits[0])
+        warning_hits = np.where(g["FuseBest_Prob"].values >= FORMAL_THRESHOLD)[0]
+        if len(warning_hits) == 0:
+            category = "missed"
+            lead_windows = np.nan
+        else:
+            warn_idx = int(warning_hits[0])
+            lead_windows = event_idx - warn_idx
+            if lead_windows >= 2:
+                category = ">=2 windows early"
+            elif lead_windows == 1:
+                category = "1 window early"
+            elif lead_windows == 0:
+                category = "same window"
+            else:
+                category = "missed"
+        records.append({"Patient_ID": pid, "Event_Index": event_idx, "Lead_Windows": lead_windows, "Category": category})
+    lead_df = pd.DataFrame(records)
+    lead_df.to_csv(OUT_DIR / "TeacherFrozenFuse_LeadTime_Warning.csv", index=False)
+
+    order = [">=2 windows early", "1 window early", "same window", "missed"]
+    counts = lead_df["Category"].value_counts().reindex(order).fillna(0).astype(int)
+    fig, ax = plt.subplots(figsize=(8.0, 5.2))
+    bars = ax.bar(order, counts.values, color=["#16a34a", "#84cc16", "#f59e0b", "#dc2626"])
+    total = max(1, counts.sum())
+    for bar, count in zip(bars, counts.values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2, f"{count}\n({count/total:.0%})", ha="center", fontsize=10)
+    ax.set_title("Lead-Time Warning Categories for Relapsing Patients")
+    ax.set_ylabel("Patients")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_LeadTime_Warning.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_topk_capture(patient_te, patient_te_direct):
+    ranks = np.arange(5, 101, 5)
+    n = len(patient_te)
+    n_pos = max(1, int(patient_te["Y"].sum()))
+    rows = []
+    for k in ranks:
+        top_n = max(1, int(np.ceil(n * k / 100)))
+        top_formal = patient_te.sort_values("proba", ascending=False).head(top_n)
+        top_direct = patient_te_direct.sort_values("proba", ascending=False).head(top_n)
+        formal_capture = float(top_formal["Y"].sum() / n_pos)
+        direct_capture = float(top_direct["Y"].sum() / n_pos)
+        random_capture = float(k / 100.0)
+        rows.append({"TopK_Percent": k, "FormalWinner": formal_capture, "DirectBaseline": direct_capture, "RandomBaseline": random_capture})
+    capture_df = pd.DataFrame(rows)
+    capture_df.to_csv(OUT_DIR / "TeacherFrozenFuse_TopK_Capture.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.2))
+    ax.plot(capture_df["TopK_Percent"], capture_df["FormalWinner"], marker="o", color="#111827", label="Formal winner")
+    ax.plot(capture_df["TopK_Percent"], capture_df["DirectBaseline"], marker="s", color="#2563eb", label="Direct baseline")
+    ax.plot(capture_df["TopK_Percent"], capture_df["RandomBaseline"], linestyle="--", color="#9ca3af", label="Random baseline")
+    ax.set_xlabel("Top-k highest-risk patients (%)")
+    ax.set_ylabel("Captured relapse patients (%)")
+    ax.set_title("Top-k Capture Curve (Patient Level)")
+    ax.set_ylim(0, 1.02)
+    ax.set_yticks(np.linspace(0, 1.0, 6))
+    ax.set_yticklabels([f"{int(v*100)}%" for v in np.linspace(0, 1.0, 6)])
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_TopK_Capture.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_patient_delta_vs_direct(patient_te, patient_te_direct):
+    merged = patient_te[["Patient_ID", "Y", "proba"]].rename(columns={"proba": "FormalWinner"}).merge(
+        patient_te_direct[["Patient_ID", "proba"]].rename(columns={"proba": "DirectBaseline"}),
+        on="Patient_ID",
+        how="inner",
+    )
+    merged.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Delta_vs_Direct.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.2))
+    colors = np.where(merged["Y"].values == 1, "#dc2626", "#2563eb")
+    ax.scatter(merged["DirectBaseline"], merged["FormalWinner"], c=colors, alpha=0.75, s=34, edgecolors="white", linewidths=0.4)
+    lim = max(0.35, float(max(merged["DirectBaseline"].max(), merged["FormalWinner"].max())) + 0.05)
+    ax.plot([0, lim], [0, lim], linestyle="--", color="#6b7280", lw=1)
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_xlabel("Direct baseline patient risk")
+    ax.set_ylabel("Formal winner patient risk")
+    ax.set_title("Patient-Level Risk Shift vs Direct Baseline")
+    ax.grid(alpha=0.25)
+    handles = [
+        plt.Line2D([0], [0], marker="o", color="w", label="Observed relapse", markerfacecolor="#dc2626", markersize=7),
+        plt.Line2D([0], [0], marker="o", color="w", label="No observed relapse", markerfacecolor="#2563eb", markersize=7),
+    ]
+    ax.legend(handles=handles, frameon=False, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Delta_vs_Direct.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_architecture(best_summary):
@@ -486,6 +919,7 @@ def write_analysis_markdown(best_summary, backbone_df, fuse_df, shap_df, e2e_sha
 
 
 def main():
+    args = parse_args()
     best_summary, fuse_df, backbone_df, best_fuse = load_best_artifacts()
     df_fit, df_val, df_te, fit_ds, val_ds, te_ds, scalers = rebuild_data()
     backbone_model = load_backbone(best_summary, fit_ds)
@@ -504,31 +938,67 @@ def main():
         df_fit["Patient_ID"].values,
     )
 
-    feature_names = best_fuse["feature_names"]
-    best_model = best_fuse["model"]
+    if args.load_pkl and (OUT_DIR / "TeacherFrozenFuse_FormalWinner.pkl").exists():
+        formal_bundle = load_formal_winner_bundle()
+        feature_names = formal_bundle["feature_names"]
+        best_model = formal_bundle["model"]
+    else:
+        feature_names = best_fuse["feature_names"]
+        best_model = best_fuse["model"]
     x_fit = master_frames["fit"][feature_names]
     x_val = master_frames["val"][feature_names]
     x_te = master_frames["test"][feature_names]
     fit_proba = best_model.predict_proba(x_fit)[:, 1]
     val_proba = best_model.predict_proba(x_val)[:, 1]
     te_proba = best_model.predict_proba(x_te)[:, 1]
+    te_pred_df = load_temporal_prediction_table()
+    if te_pred_df is not None and len(te_pred_df) == len(te_proba):
+        te_proba = te_pred_df["FuseBest_Prob"].to_numpy()
+    else:
+        te_pred_df = pd.DataFrame(
+            {
+                "Patient_ID": df_te["Patient_ID"].values,
+                "Interval_Name": df_te["Interval_Name"].values,
+                "TeacherHead_Prob": te_preds["teacher_prob"],
+                "Landmark_Signal": te_preds["landmark_signal"],
+                "FuseBest_Prob": te_proba,
+            }
+        )
 
     plot_architecture(best_summary)
     plot_backbone_comparison(backbone_df)
     plot_gate_comparison(backbone_df)
     plot_top_experiments(fuse_df)
-    save_formal_winner_bundle(best_summary, best_fuse, best_model, feature_names)
+    if not args.load_pkl:
+        save_formal_winner_bundle(best_summary, best_fuse, best_model, feature_names)
     save_formal_winner_params(best_model, feature_names)
 
-    patient_fit = aggregate_patient_level(df_fit, fit_proba, method="product")
-    patient_te = aggregate_patient_level(df_te, te_proba, method="product")
+    patient_fit, patient_te, bins = build_patient_level_outputs(df_fit, df_te, fit_proba, te_proba)
     save_patient_risk_strata(patient_fit, patient_te, OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Q1Q4.png")
+    plot_patient_waterfall(patient_te, bins)
+    plot_patient_risk_heatmap(df_te, te_proba, patient_te)
+    typical_df = select_typical_patients(patient_te)
+    plot_typical_patients(df_te, te_pred_df, typical_df)
+    plot_patient_q1q4_ci(patient_fit, patient_te)
+    plot_leadtime_warning(df_te, te_proba, patient_te)
 
-    shap_df = save_shap_outputs(best_model, x_fit, x_te, feature_names)
-    fit_raw, val_raw, te_raw, static_cols, local_cols, global_cols = build_engineered_feature_frames(df_fit, df_val, df_te)
-    fit_raw, val_raw, te_raw = attach_landmark_meta(fit_raw, val_raw, te_raw, df_fit, df_val, df_te, fit_ds, val_ds, te_ds)
-    e2e_wrapper = FormalWinnerEndToEndWrapper(backbone_model, best_model, scalers, static_cols, local_cols, global_cols)
-    e2e_shap_df = save_end_to_end_shap_outputs(e2e_wrapper, fit_raw, te_raw)
+    _, direct_fit_proba, direct_te_proba = compute_direct_baseline_predictions(df_fit, df_te)
+    _, patient_te_direct, _ = build_patient_level_outputs(df_fit, df_te, direct_fit_proba, direct_te_proba, save_outputs=False)
+    patient_te_direct.rename(columns={"Risk_Group": "Direct_Risk_Group"}, inplace=True)
+    plot_topk_capture(patient_te, patient_te_direct)
+    plot_patient_delta_vs_direct(patient_te, patient_te_direct)
+
+    if args.skip_shap:
+        shap_path = OUT_DIR / "TeacherFrozenFuse_SHAP_Feature_Importance.csv"
+        e2e_path = OUT_DIR / "TeacherFrozenFuse_EndToEnd_SHAP_Feature_Importance.csv"
+        shap_df = pd.read_csv(shap_path) if shap_path.exists() else pd.DataFrame(columns=["Feature", "MeanAbsSHAP", "MeanSHAP"])
+        e2e_shap_df = pd.read_csv(e2e_path) if e2e_path.exists() else pd.DataFrame(columns=["Feature", "MeanAbsSHAP", "MeanSHAP"])
+    else:
+        shap_df = save_shap_outputs(best_model, x_fit, x_te, feature_names)
+        fit_raw, val_raw, te_raw, static_cols, local_cols, global_cols = build_engineered_feature_frames(df_fit, df_val, df_te)
+        fit_raw, val_raw, te_raw = attach_landmark_meta(fit_raw, val_raw, te_raw, df_fit, df_val, df_te, fit_ds, val_ds, te_ds)
+        e2e_wrapper = FormalWinnerEndToEndWrapper(backbone_model, best_model, scalers, static_cols, local_cols, global_cols)
+        e2e_shap_df = save_end_to_end_shap_outputs(e2e_wrapper, fit_raw, te_raw)
     write_analysis_markdown(best_summary, backbone_df, fuse_df, shap_df, e2e_shap_df)
 
     discrim_df = pd.DataFrame(
