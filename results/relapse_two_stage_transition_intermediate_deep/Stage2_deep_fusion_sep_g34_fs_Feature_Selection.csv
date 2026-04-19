@@ -1,9 +1,0 @@
-feature,coefficient,abs_coefficient,selected
-Champion_Prob,,,True
-g4_nh_Prob,,,True
-fusion_sep_g34_StdLogit,,,True
-Champion_minus_Direct,,,True
-Direct_x_g4_nh,,,True
-Window_1M->3M_x_Direct_Logit,,,True
-Window_3M->6M_x_g4_nh_Logit,,,True
-fusion_sep_g34_Direct_x_LatentMean,,,True

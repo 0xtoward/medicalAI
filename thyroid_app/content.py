@@ -3,7 +3,7 @@
 OVERVIEW_PLOTS = [
     ("主方法图", "m1.png"),
     ("最终判别能力", "results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_FormalWinner_Discrimination.png"),
-    ("患者级风险分层", "results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Patient_Risk_Q1Q4.png"),
+    ("患者级风险分层（95% CI）", "results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_Patient_Q1Q4_CI.png"),
     ("端到端 SHAP 重要性", "results/relapse_teacher_frozen_fuse/TeacherFrozenFuse_EndToEnd_SHAP_Bar.png"),
 ]
 

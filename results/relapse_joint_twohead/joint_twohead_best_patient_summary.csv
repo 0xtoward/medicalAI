@@ -1,9 +1,0 @@
-Level,Metric,Value,CI_95
-Patient,AUC,0.7206413730803974,"[0.631, 0.805]"
-Patient,PR_AUC,0.3888535692738472,"[0.284, 0.563]"
-Patient,Brier,0.2769038540860869,"[0.236, 0.314]"
-Patient,Recall,0.8333333333333334,"[0.705, 0.954]"
-Patient,Specificity,0.4796747967479675,"[0.398, 0.573]"
-Patient,Calibration_Intercept,-1.5772751269474616,"[-2.174, -1.215]"
-Patient,Calibration_Slope,0.6359356241141655,"[0.328, 1.049]"
-Patient,Threshold,0.49000000000000005,

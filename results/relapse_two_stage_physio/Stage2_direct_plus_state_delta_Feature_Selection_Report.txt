@@ -1,6 +1,0 @@
-original_features=22
-selected_features=22
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=Time_In_Normal, ThyroidW, FT3_Current, Delta_TSH_k0, Start_Time, Ever_Hypo_Before, logTSH_Mean_ToDate, FT4_Mean_ToDate, FT4_Current, Interval_Name_6M->12M, FT3_Baseline, logTSH_STD_ToDate, Height, FT3_Prev, logTSH_Baseline, Uptake24h, P_next_hyper, NextState_Entropy, NextState_MaxProb, Pred_HyperEvidence, Pred_Delta_FT4, Pred_Delta_logTSH
-note=fixed compact handoff

@@ -1,5 +1,0 @@
-original_features=28
-selected_features=9
-best_c=0.05
-cv_pr_auc=0.766479
-selected_feature_names=Height, ThyroidW, TRAb, FT3_1M, FT4_1M, FT3_3M, FT4_3M, TSH_3M, D_TSH_3M-0M

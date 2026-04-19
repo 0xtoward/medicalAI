@@ -1,4 +1,0 @@
-feature,coef,abs_coef,family,pretty_feature,odds_ratio,is_active,direction,family_order
-Direct_Anchor_Score,0.28579935900532577,0.28579935900532577,Other,Direct Anchor Score,1.330825410329042,True,Risk up,6
-P_next_hyper,0.024136892425332932,0.024136892425332932,Other,P next hyper,1.0244305450742832,True,Risk up,6
-P_next_hypo,0.0,0.0,Other,P next hypo,1.0,False,Zeroed,6

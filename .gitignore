@@ -39,3 +39,16 @@ draft/.browser_data/
 
 # 大型模型缓存
 *.pkl
+
+# 结果目录：只保留 README 实际引用到的两个子目录，其余历史/探索性结果不入库
+results/*
+!results/fixed_landmark_binary/
+!results/relapse_teacher_frozen_fuse/
+
+# 早期探索 artifacts 与重跑缓存
+artifacts/
+artifacts_rerun_*/
+
+# 过程性 draft 与已从正文中移除的早期方法学总览图
+draft/
+methodology.png

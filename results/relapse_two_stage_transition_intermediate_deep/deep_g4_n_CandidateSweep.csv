@@ -1,9 +1,0 @@
-Candidate,Base_Type,Feature_Selection,Calibration,Best_Model,PR_AUC,AUC,Brier,Threshold,Note
-deep_g4_n_nofs_cal_interval,calibrated,False,interval,Calibrated,0.2671415240024641,0.8041045738152942,0.0659039485807941,0.12999999999999998,targeted refit for g4_n
-deep_g4_n_fs_cal_interval,calibrated,True,interval,Calibrated,0.2671415240024641,0.8041045738152942,0.0659039485807941,0.12999999999999998,targeted refit for g4_n
-deep_g4_n_nofs_cal_phase,calibrated,False,phase,Calibrated,0.25062264412163915,0.7977620791007065,0.0668964686018534,0.10999999999999999,targeted refit for g4_n
-deep_g4_n_fs_cal_phase,calibrated,True,phase,Calibrated,0.25062264412163915,0.7977620791007065,0.0668964686018534,0.10999999999999999,targeted refit for g4_n
-deep_g4_n_nofs_raw,raw,False,none,Logistic Reg.,0.21766799574249313,0.7740937451657814,0.06887941173099699,0.09,targeted refit for g4_n
-deep_g4_n_nofs_cal_global,calibrated,False,global,Calibrated,0.21766799574249313,0.7740937451657814,0.06884494340881979,0.13999999999999999,targeted refit for g4_n
-deep_g4_n_fs_raw,raw,True,none,Logistic Reg.,0.21766799574249313,0.7740937451657814,0.06887941173099699,0.09,targeted refit for g4_n
-deep_g4_n_fs_cal_global,calibrated,True,global,Calibrated,0.21766799574249313,0.7740937451657814,0.06884494340881979,0.13999999999999999,targeted refit for g4_n

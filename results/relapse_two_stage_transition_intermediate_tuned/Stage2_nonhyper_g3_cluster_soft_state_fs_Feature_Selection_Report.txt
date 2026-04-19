@@ -1,6 +1,0 @@
-original_features=9
-selected_features=9
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=G3_Archetype_SoftDist_0, G3_Archetype_Dist_0, G3_Archetype_Prob_1, G3_Archetype_SoftDist_1, G3_Archetype_Prob_2, G3_Archetype_Prob_3, G3_Archetype_Prob_4, G3_Archetype_SoftDist_4, G3_Archetype_MaxProb
-note=soft archetype memberships from predicted future physiology; scope=nonhyper; feature_selection=True

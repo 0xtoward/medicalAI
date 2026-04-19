@@ -1,4 +1,4 @@
-"""Generate a publication-style baseline characteristics table."""
+"""Generate a patient-level baseline characteristics table."""
 
 from __future__ import annotations
 
@@ -14,14 +14,13 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency, kruskal, mannwhitneyu
 
-from utils.data import load_data, temporal_split
+from utils.data import load_data
 
 
 OUT_DIR = Path("results/cohort_summary")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-
-OUTCOME_MAP = {1: "Hyper", 2: "Hypo", 3: "Normal"}
+VAL_FRACTION = 0.15
 
 
 def format_median_iqr(values: pd.Series) -> str:
@@ -74,8 +73,8 @@ def continuous_p(series: pd.Series, groups: pd.Series) -> float:
 
 
 def build_feature_frame() -> pd.DataFrame:
-    X_s, ft3, ft4, tsh, _, y, pids = load_data()
-    train_mask, test_mask = temporal_split(pids)
+    """Return one baseline row per patient with cohort split labels."""
+    X_s, ft3, ft4, tsh, _, _, pids = load_data()
 
     columns = [
         "Sex", "Age", "Height", "Weight", "BMI", "Exophthalmos", "ThyroidW", "RAI3d",
@@ -85,8 +84,26 @@ def build_feature_frame() -> pd.DataFrame:
     df["FT3_0M"] = ft3[:, 0]
     df["FT4_0M"] = ft4[:, 0]
     df["TSH_0M"] = tsh[:, 0]
-    df["Outcome"] = pd.Series(y).map(OUTCOME_MAP)
-    df["Split"] = np.where(train_mask, "Training", "Test")
+    df["PID"] = pids
+
+    # Patient-level baseline table: keep the first baseline entry per patient.
+    df = df.drop_duplicates("PID", keep="first").copy()
+
+    unique_pids = list(dict.fromkeys(pids))
+    dev_cutoff = int(len(unique_pids) * 0.8)
+    train_patient_order = unique_pids[:dev_cutoff]
+    split_idx = int(len(train_patient_order) * (1 - VAL_FRACTION))
+    fit_pids = set(train_patient_order[:split_idx])
+    val_pids = set(train_patient_order[split_idx:])
+
+    def assign_split(pid: object) -> str:
+        if pid in fit_pids:
+            return "Training"
+        if pid in val_pids:
+            return "Validation"
+        return "Temporal test"
+
+    df["Split"] = df["PID"].map(assign_split)
     return df
 
 
@@ -94,67 +111,43 @@ def section_row(label: str) -> dict[str, str]:
     return {
         "Characteristic": label,
         "Overall": "",
-        "Hyper": "",
-        "Normal": "",
-        "Hypo": "",
-        "P_Outcome": "",
         "Training": "",
-        "Test": "",
-        "P_Split": "",
+        "Validation": "",
+        "TemporalValidation": "",
+        "P_Cohort": "",
     }
 
 
-def subrow(label: str, values: dict[str, str], p_outcome: str = "", p_split: str = "") -> dict[str, str]:
+def subrow(label: str, values: dict[str, str], p_cohort: str = "") -> dict[str, str]:
     return {
         "Characteristic": label,
         "Overall": values.get("Overall", ""),
-        "Hyper": values.get("Hyper", ""),
-        "Normal": values.get("Normal", ""),
-        "Hypo": values.get("Hypo", ""),
-        "P_Outcome": p_outcome,
         "Training": values.get("Training", ""),
-        "Test": values.get("Test", ""),
-        "P_Split": p_split,
+        "Validation": values.get("Validation", ""),
+        "TemporalValidation": values.get("TemporalValidation", ""),
+        "P_Cohort": p_cohort,
     }
 
 
 def make_summary_table(df: pd.DataFrame) -> pd.DataFrame:
-    outcome_order = ["Hyper", "Normal", "Hypo"]
-    split_order = ["Training", "Test"]
+    split_order = ["Training", "Validation", "Temporal test"]
 
-    def group_value(column: str, group_col: str, group_name: str, formatter) -> str:
-        return formatter(df.loc[df[group_col] == group_name, column])
+    def group_value(column: str, split_name: str, formatter) -> str:
+        return formatter(df.loc[df["Split"] == split_name, column])
 
     rows: list[dict[str, str]] = []
-
-    rows.append(section_row("Outcome class, n (%)"))
-    outcome_counts = df["Outcome"].value_counts()
-    split_p = chi2_contingency(pd.crosstab(df["Split"], df["Outcome"]))[1]
-    for idx, outcome in enumerate(outcome_order):
-        values = {
-            "Overall": f"{int(outcome_counts.get(outcome, 0))} ({outcome_counts.get(outcome, 0) / len(df) * 100:.1f}%)",
-            "Hyper": f"{int((df['Outcome'] == outcome).sum()) if outcome == 'Hyper' else 0} ({(df['Outcome'] == outcome).mean() * 100:.1f}%)" if outcome == "Hyper" else f"0 (0.0%)",
-            "Normal": f"{int((df['Outcome'] == outcome).sum()) if outcome == 'Normal' else 0} ({(df['Outcome'] == outcome).mean() * 100:.1f}%)" if outcome == "Normal" else f"0 (0.0%)",
-            "Hypo": f"{int((df['Outcome'] == outcome).sum()) if outcome == 'Hypo' else 0} ({(df['Outcome'] == outcome).mean() * 100:.1f}%)" if outcome == "Hypo" else f"0 (0.0%)",
-            "Training": f"{int(((df['Split'] == 'Training') & (df['Outcome'] == outcome)).sum())} ({((df['Split'] == 'Training') & (df['Outcome'] == outcome)).sum() / (df['Split'] == 'Training').sum() * 100:.1f}%)",
-            "Test": f"{int(((df['Split'] == 'Test') & (df['Outcome'] == outcome)).sum())} ({((df['Split'] == 'Test') & (df['Outcome'] == outcome)).sum() / (df['Split'] == 'Test').sum() * 100:.1f}%)",
-        }
-        rows.append(subrow(f"  {outcome}", values, p_split=format_p(split_p) if idx == 0 else ""))
 
     rows.append(section_row("Demographics"))
     rows.append(
         subrow(
             "Male, n (%)",
             {
-                "Overall": format_binary(df["Sex"]),
-                "Hyper": group_value("Sex", "Outcome", "Hyper", format_binary),
-                "Normal": group_value("Sex", "Outcome", "Normal", format_binary),
-                "Hypo": group_value("Sex", "Outcome", "Hypo", format_binary),
-                "Training": group_value("Sex", "Split", "Training", format_binary),
-                "Test": group_value("Sex", "Split", "Test", format_binary),
-            },
-            p_outcome=format_p(chi_square_p((df["Sex"] > 0.5).astype(int), df["Outcome"])),
-            p_split=format_p(chi_square_p((df["Sex"] > 0.5).astype(int), df["Split"])),
+                    "Overall": format_binary(df["Sex"]),
+                    "Training": group_value("Sex", "Training", format_binary),
+                    "Validation": group_value("Sex", "Validation", format_binary),
+                    "TemporalValidation": group_value("Sex", "Temporal test", format_binary),
+                },
+            p_cohort=format_p(chi_square_p((df["Sex"] > 0.5).astype(int), df["Split"])),
         )
     )
 
@@ -183,15 +176,17 @@ def make_summary_table(df: pd.DataFrame) -> pd.DataFrame:
         subrow(
             "Exophthalmos, n (%)",
             {
-                "Overall": format_binary(df["Exophthalmos"]),
-                "Hyper": group_value("Exophthalmos", "Outcome", "Hyper", format_binary),
-                "Normal": group_value("Exophthalmos", "Outcome", "Normal", format_binary),
-                "Hypo": group_value("Exophthalmos", "Outcome", "Hypo", format_binary),
-                "Training": group_value("Exophthalmos", "Split", "Training", format_binary),
-                "Test": group_value("Exophthalmos", "Split", "Test", format_binary),
-            },
-            p_outcome=format_p(chi_square_p((pd.to_numeric(df["Exophthalmos"], errors="coerce") > 0.5).astype(float), df["Outcome"])),
-            p_split=format_p(chi_square_p((pd.to_numeric(df["Exophthalmos"], errors="coerce") > 0.5).astype(float), df["Split"])),
+                    "Overall": format_binary(df["Exophthalmos"]),
+                    "Training": group_value("Exophthalmos", "Training", format_binary),
+                    "Validation": group_value("Exophthalmos", "Validation", format_binary),
+                    "TemporalValidation": group_value("Exophthalmos", "Temporal test", format_binary),
+                },
+            p_cohort=format_p(
+                chi_square_p(
+                    (pd.to_numeric(df["Exophthalmos"], errors="coerce") > 0.5).astype(float),
+                    df["Split"],
+                )
+            ),
         )
     )
 
@@ -201,14 +196,11 @@ def make_summary_table(df: pd.DataFrame) -> pd.DataFrame:
                 label,
                 {
                     "Overall": format_median_iqr(df[key]),
-                    "Hyper": group_value(key, "Outcome", "Hyper", format_median_iqr),
-                    "Normal": group_value(key, "Outcome", "Normal", format_median_iqr),
-                    "Hypo": group_value(key, "Outcome", "Hypo", format_median_iqr),
-                    "Training": group_value(key, "Split", "Training", format_median_iqr),
-                    "Test": group_value(key, "Split", "Test", format_median_iqr),
+                    "Training": group_value(key, "Training", format_median_iqr),
+                    "Validation": group_value(key, "Validation", format_median_iqr),
+                    "TemporalValidation": group_value(key, "Temporal test", format_median_iqr),
                 },
-                p_outcome=format_p(continuous_p(df[key], df["Outcome"])),
-                p_split=format_p(continuous_p(df[key], df["Split"])),
+                p_cohort=format_p(continuous_p(df[key], df["Split"])),
             )
         )
 
@@ -219,14 +211,11 @@ def make_summary_table(df: pd.DataFrame) -> pd.DataFrame:
                 label,
                 {
                     "Overall": format_median_iqr(df[key]),
-                    "Hyper": group_value(key, "Outcome", "Hyper", format_median_iqr),
-                    "Normal": group_value(key, "Outcome", "Normal", format_median_iqr),
-                    "Hypo": group_value(key, "Outcome", "Hypo", format_median_iqr),
-                    "Training": group_value(key, "Split", "Training", format_median_iqr),
-                    "Test": group_value(key, "Split", "Test", format_median_iqr),
+                    "Training": group_value(key, "Training", format_median_iqr),
+                    "Validation": group_value(key, "Validation", format_median_iqr),
+                    "TemporalValidation": group_value(key, "Temporal test", format_median_iqr),
                 },
-                p_outcome=format_p(continuous_p(df[key], df["Outcome"])),
-                p_split=format_p(continuous_p(df[key], df["Split"])),
+                p_cohort=format_p(continuous_p(df[key], df["Split"])),
             )
         )
 
@@ -237,25 +226,22 @@ def render_table(table_df: pd.DataFrame, out_path: Path) -> None:
     headers = [
         "Characteristic",
         f"Overall, N = {table_df.attrs['n_total']}",
-        f"Hyper, N = {table_df.attrs['n_hyper']}",
-        f"Normal, N = {table_df.attrs['n_normal']}",
-        f"Hypo, N = {table_df.attrs['n_hypo']}",
-        "P-value¹",
         f"Training, N = {table_df.attrs['n_train']}",
-        f"Test, N = {table_df.attrs['n_test']}",
-        "P-value²",
+        f"Validation, N = {table_df.attrs['n_val']}",
+        f"Temporal validation, N = {table_df.attrs['n_test']}",
+        "P-value",
     ]
 
     cell_text = table_df[
-        ["Characteristic", "Overall", "Hyper", "Normal", "Hypo", "P_Outcome", "Training", "Test", "P_Split"]
+        ["Characteristic", "Overall", "Training", "Validation", "TemporalValidation", "P_Cohort"]
     ].values.tolist()
 
     n_rows = len(cell_text)
-    fig_h = max(12, 0.42 * n_rows + 1.8)
-    fig, ax = plt.subplots(figsize=(21, fig_h))
+    fig_h = max(11, 0.40 * n_rows + 1.8)
+    fig, ax = plt.subplots(figsize=(18, fig_h))
     ax.axis("off")
 
-    col_widths = [0.24, 0.13, 0.12, 0.12, 0.12, 0.07, 0.12, 0.12, 0.07]
+    col_widths = [0.30, 0.16, 0.14, 0.14, 0.16, 0.10]
     table = ax.table(
         cellText=cell_text,
         colLabels=headers,
@@ -295,9 +281,9 @@ def render_table(table_df: pd.DataFrame, out_path: Path) -> None:
     fig.text(
         0.01,
         0.02,
-        "Table 1. Baseline demographic, treatment, immunologic, and baseline laboratory characteristics.\n"
-        "¹ P-value compares Hyper vs Normal vs Hypo groups. ² P-value compares training vs test split.\n"
-        "Categorical variables use chi-square tests; continuous variables use Mann-Whitney U or Kruskal-Wallis tests.",
+        "Table 1. Patient-level baseline demographic, treatment, immunologic, and pretreatment laboratory characteristics.\n"
+        "P-values compare Training vs Validation vs Temporal validation cohorts.\n"
+        "Categorical variables use chi-square tests; continuous variables use Kruskal-Wallis tests.",
         fontsize=9,
         ha="left",
     )
@@ -309,11 +295,9 @@ def main() -> None:
     df = build_feature_frame()
     table_df = make_summary_table(df)
     table_df.attrs["n_total"] = len(df)
-    table_df.attrs["n_hyper"] = int((df["Outcome"] == "Hyper").sum())
-    table_df.attrs["n_normal"] = int((df["Outcome"] == "Normal").sum())
-    table_df.attrs["n_hypo"] = int((df["Outcome"] == "Hypo").sum())
     table_df.attrs["n_train"] = int((df["Split"] == "Training").sum())
-    table_df.attrs["n_test"] = int((df["Split"] == "Test").sum())
+    table_df.attrs["n_val"] = int((df["Split"] == "Validation").sum())
+    table_df.attrs["n_test"] = int((df["Split"] == "Temporal test").sum())
 
     csv_path = OUT_DIR / "Baseline_Characteristics_Table.csv"
     png_path = OUT_DIR / "Baseline_Characteristics_Table.png"

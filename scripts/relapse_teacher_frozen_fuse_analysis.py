@@ -19,6 +19,7 @@ import pandas as pd
 import scipy.integrate
 import torch
 import joblib
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 
 if not hasattr(scipy.integrate, "trapz"):
     scipy.integrate.trapz = scipy.integrate.trapezoid
@@ -42,8 +43,12 @@ def load_best_artifacts():
     best_summary = pd.read_csv(OUT_DIR / "Best_Pipeline_Summary.csv").iloc[0]
     fuse_df = pd.read_csv(OUT_DIR / "FrozenFuse_Experiment_Summary.csv")
     backbone_df = pd.read_csv(OUT_DIR / "Backbone_Experiment_Summary.csv")
-    with open(OUT_DIR / "Best_Frozen_Fuse.pkl", "rb") as f:
-        best_fuse = pickle.load(f)
+    bundle_path = OUT_DIR / "Best_Frozen_Fuse.joblib"
+    if bundle_path.exists():
+        best_fuse = joblib.load(bundle_path)
+    else:
+        with open(OUT_DIR / "Best_Frozen_Fuse.pkl", "rb") as f:
+            best_fuse = pickle.load(f)
     return best_summary, fuse_df, backbone_df, best_fuse
 
 
@@ -305,47 +310,175 @@ def plot_patient_risk_heatmap(df_te, te_proba, patient_te):
         .pivot(index="Patient_ID", columns="Interval_Name", values="FuseBest_Prob")
         .reindex(columns=INTERVAL_ORDER)
     )
-    ordered_ids = patient_te.sort_values("proba", ascending=False)["Patient_ID"].tolist()
+    plot_df = patient_te[["Patient_ID", "Y", "proba", "Risk_Group"]].copy()
+    plot_df["Outcome_Label"] = np.where(plot_df["Y"].eq(1), "Observed relapse", "No observed relapse")
+    plot_df = plot_df.sort_values(["Y", "proba"], ascending=[False, False]).reset_index(drop=True)
+    ordered_ids = plot_df["Patient_ID"].tolist()
     pivot = pivot.reindex(ordered_ids)
     pivot.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Heatmap.csv")
 
-    cmap = plt.cm.YlOrRd.copy()
-    cmap.set_bad("#e5e7eb")
-    fig_h = max(7.0, min(24.0, 0.10 * len(pivot) + 2.5))
-    fig, ax = plt.subplots(figsize=(9.0, fig_h))
-    im = ax.imshow(pivot.values, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=max(0.35, np.nanmax(pivot.values)))
-    ax.set_title("Patient-by-Window Risk Heatmap")
-    ax.set_xlabel("Follow-up window")
-    ax.set_ylabel("Patients ranked by cumulative risk")
-    ax.set_xticks(np.arange(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns, rotation=20, ha="right")
-    if len(pivot) <= 25:
-        ax.set_yticks(np.arange(len(pivot.index)))
-        ax.set_yticklabels([str(x) for x in pivot.index])
-    else:
-        ax.set_yticks([])
-    cbar = fig.colorbar(im, ax=ax, fraction=0.028, pad=0.02)
-    cbar.set_label("Interval relapse risk")
+    risk_cmap = LinearSegmentedColormap.from_list(
+        "formal_risk",
+        ["#fff7d6", "#fde68a", "#fb923c", "#ef4444", "#991b1b"],
+    )
+    risk_cmap.set_bad("#e5e7eb")
+    quartile_cmap = ListedColormap(["#dbeafe", "#93c5fd", "#fdba74", "#f87171"])
+    quartile_map = {"Q1": 0, "Q2": 1, "Q3": 2, "Q4": 3}
+    vmax = max(FORMAL_THRESHOLD + 0.12, float(np.nanpercentile(pivot.values, 98)), 0.30)
+
+    pos_df = plot_df[plot_df["Y"] == 1].copy()
+    neg_df = plot_df[plot_df["Y"] == 0].copy()
+    panel_defs = [
+        ("Observed relapse", pos_df),
+        ("No observed relapse", neg_df),
+    ]
+    height_ratios = [max(1, len(pos_df)), max(1, len(neg_df))]
+    fig = plt.figure(figsize=(9.6, 7.8))
+    gs = fig.add_gridspec(
+        nrows=2,
+        ncols=3,
+        width_ratios=[0.12, 1.0, 0.05],
+        height_ratios=height_ratios,
+        wspace=0.06,
+        hspace=0.08,
+    )
+
+    main_axes = []
+    im = None
+    for row_idx, (title, sub_df) in enumerate(panel_defs):
+        sub_ids = sub_df["Patient_ID"].tolist()
+        sub_pivot = pivot.reindex(sub_ids)
+        quartile_vals = sub_df["Risk_Group"].map(quartile_map).fillna(0).to_numpy().reshape(-1, 1)
+
+        ax_q = fig.add_subplot(gs[row_idx, 0])
+        ax_h = fig.add_subplot(gs[row_idx, 1])
+        main_axes.append(ax_h)
+
+        ax_q.imshow(quartile_vals, aspect="auto", interpolation="nearest", cmap=quartile_cmap, vmin=0, vmax=3)
+        ax_q.set_xticks([])
+        ax_q.set_yticks([])
+        ax_q.set_title("Q", fontsize=10, pad=6)
+        for spine in ax_q.spines.values():
+            spine.set_visible(False)
+
+        im = ax_h.imshow(
+            sub_pivot.values,
+            aspect="auto",
+            interpolation="nearest",
+            cmap=risk_cmap,
+            vmin=0,
+            vmax=vmax,
+        )
+        ax_h.set_title(f"{title} (n={len(sub_df)})", fontsize=11, pad=6, loc="left")
+        ax_h.set_yticks([])
+        if row_idx == len(panel_defs) - 1:
+            ax_h.set_xticks(np.arange(len(sub_pivot.columns)))
+            ax_h.set_xticklabels(sub_pivot.columns, rotation=0)
+            ax_h.set_xlabel("Follow-up window")
+        else:
+            ax_h.set_xticks([])
+        for spine in ax_h.spines.values():
+            spine.set_visible(False)
+
+        group_changes = np.where(sub_df["Risk_Group"].values[1:] != sub_df["Risk_Group"].values[:-1])[0] + 1
+        for pos in group_changes:
+            ax_q.axhline(pos - 0.5, color="white", lw=1.2, alpha=0.9)
+            ax_h.axhline(pos - 0.5, color="white", lw=1.2, alpha=0.9)
+
+    cax = fig.add_subplot(gs[:, 2])
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label("Window-level relapse risk")
+    cbar.ax.axhline(FORMAL_THRESHOLD, color="#111827", linestyle="--", lw=1.1)
+    cbar.ax.text(
+        1.35,
+        FORMAL_THRESHOLD,
+        "0.20",
+        transform=cbar.ax.get_yaxis_transform(),
+        va="center",
+        ha="left",
+        fontsize=8,
+        color="#111827",
+    )
+
+    fig.suptitle("Patient-by-Window Risk Heatmap", y=0.985, fontsize=13)
+    fig.text(0.07, 0.50, "Patients ranked by cumulative risk within each panel", rotation=90, va="center", fontsize=10)
+    legend_handles = [
+        plt.Rectangle((0, 0), 1, 1, color="#dbeafe", label="Q1"),
+        plt.Rectangle((0, 0), 1, 1, color="#93c5fd", label="Q2"),
+        plt.Rectangle((0, 0), 1, 1, color="#fdba74", label="Q3"),
+        plt.Rectangle((0, 0), 1, 1, color="#f87171", label="Q4"),
+        plt.Line2D([0], [0], color="#111827", linestyle="--", lw=1.1, label="Alert threshold = 0.20"),
+    ]
+    fig.legend(handles=legend_handles, frameon=False, ncol=5, loc="upper center", bbox_to_anchor=(0.53, 0.02))
     fig.tight_layout()
     fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Heatmap.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-def select_typical_patients(patient_te):
-    positive = patient_te[patient_te["Y"] == 1].copy()
-    negative = patient_te[patient_te["Y"] == 0].copy()
-    high_risk_tp = positive.sort_values("proba", ascending=False).iloc[0]
-    low_risk_tn = negative.sort_values("proba", ascending=True).iloc[0]
+def select_typical_patients(df_te, patient_te):
+    unique_windows = (
+        df_te[["Patient_ID", "Interval_Name", "Start_Time", "Stop_Time"]]
+        .drop_duplicates()
+        .sort_values(["Patient_ID", "Start_Time", "Stop_Time", "Interval_Name"])
+        .groupby("Patient_ID")
+        .agg(
+            Unique_Windows=("Interval_Name", "size"),
+            Window_Signature=("Interval_Name", lambda s: tuple(s.tolist())),
+        )
+    )
+    ranked = patient_te.merge(unique_windows, on="Patient_ID", how="left")
+    ranked["Unique_Windows"] = ranked["Unique_Windows"].fillna(0).astype(int)
+    ranked["Window_Signature_Label"] = ranked["Window_Signature"].apply(
+        lambda sig: " | ".join(sig) if isinstance(sig, tuple) else ""
+    )
 
-    remaining = patient_te.loc[~patient_te["Patient_ID"].isin([high_risk_tp["Patient_ID"], low_risk_tn["Patient_ID"]])].copy()
+    def pick(df, sort_cols, ascending, min_windows=2):
+        eligible = df[df["Unique_Windows"] >= min_windows].copy()
+        if eligible.empty:
+            eligible = df.copy()
+        return eligible.sort_values(sort_cols, ascending=ascending).iloc[0]
+
+    signature_stats = (
+        ranked[ranked["Unique_Windows"] == 4]
+        .groupby("Window_Signature", as_index=False)
+        .agg(
+            Patients=("Patient_ID", "size"),
+            Positives=("Y", "sum"),
+            Negatives=("Y", lambda s: int((s == 0).sum())),
+        )
+    )
+    signature_stats = signature_stats[(signature_stats["Positives"] >= 1) & (signature_stats["Negatives"] >= 2)]
+
+    if not signature_stats.empty:
+        selected_signature = (
+            signature_stats.sort_values(["Patients", "Positives"], ascending=[False, False]).iloc[0]["Window_Signature"]
+        )
+        candidate_pool = ranked[ranked["Window_Signature"] == selected_signature].copy()
+    else:
+        selected_signature = None
+        candidate_pool = ranked.copy()
+
+    positive = candidate_pool[candidate_pool["Y"] == 1].copy()
+    negative = candidate_pool[candidate_pool["Y"] == 0].copy()
+    high_risk_tp = pick(positive, ["proba", "Unique_Windows"], [False, False], min_windows=4 if selected_signature else 2)
+    low_risk_tn = pick(negative, ["proba", "Unique_Windows"], [True, False], min_windows=4 if selected_signature else 2)
+
+    remaining = candidate_pool.loc[
+        ~candidate_pool["Patient_ID"].isin([high_risk_tp["Patient_ID"], low_risk_tn["Patient_ID"]])
+    ].copy()
     remaining["BoundaryGap"] = np.abs(remaining["proba"] - FORMAL_THRESHOLD)
-    boundary = remaining.sort_values(["BoundaryGap", "proba"], ascending=[True, True]).iloc[0]
+    boundary = pick(
+        remaining,
+        ["BoundaryGap", "proba", "Unique_Windows"],
+        [True, True, False],
+        min_windows=4 if selected_signature else 2,
+    )
 
     out = pd.DataFrame(
         [
-            {"Case_Type": "高风险真阳性", **high_risk_tp.to_dict()},
-            {"Case_Type": "低风险真阴性", **low_risk_tn.to_dict()},
-            {"Case_Type": "边界病例", **boundary.to_dict()},
+            {"Case_Type": "High-risk relapse case", **high_risk_tp.to_dict()},
+            {"Case_Type": "Low-risk non-relapse case", **low_risk_tn.to_dict()},
+            {"Case_Type": "Threshold-adjacent case", **boundary.to_dict()},
         ]
     )
     out.to_csv(OUT_DIR / "TeacherFrozenFuse_TypicalPatients.csv", index=False)
@@ -377,6 +510,28 @@ def plot_typical_patients(df_te, te_pred_df, typical_df):
     fig, axes = plt.subplots(len(typical_df), 2, figsize=(15.5, 4.4 * len(typical_df)))
     if len(typical_df) == 1:
         axes = np.asarray([axes])
+    axes[0, 0].text(
+        0.5,
+        1.08,
+        "Laboratory trajectory",
+        transform=axes[0, 0].transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        color="#475569",
+        weight="semibold",
+    )
+    axes[0, 1].text(
+        0.5,
+        1.08,
+        "Model risk trajectory",
+        transform=axes[0, 1].transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        color="#475569",
+        weight="semibold",
+    )
 
     for row_idx, (_, case_row) in enumerate(typical_df.iterrows()):
         pid = case_row["Patient_ID"]
@@ -416,17 +571,17 @@ def plot_typical_patients(df_te, te_pred_df, typical_df):
         ax_l.legend(lines1 + lines2, labels1 + labels2, frameon=False, loc="upper left", ncol=3)
 
         ax_r = axes[row_idx, 1]
-        ax_r.plot(x, sub["TeacherHead_Prob"], marker="o", color="#7c3aed", label="Teacher")
-        ax_r.plot(x, sub["Landmark_Signal"], marker="s", color="#ea580c", label="Landmark")
+        ax_r.plot(x, sub["TeacherHead_Prob"], marker="o", color="#7c3aed", label="Teacher head")
+        ax_r.plot(x, sub["Landmark_Signal"], marker="s", color="#ea580c", label="Landmark signal")
         ax_r.plot(x, sub["FuseBest_Prob"], marker="D", color="#111827", label="Final risk")
-        ax_r.axhline(FORMAL_THRESHOLD, color="#6b7280", linestyle="--", lw=1.1, label="Threshold")
+        ax_r.axhline(FORMAL_THRESHOLD, color="#6b7280", linestyle="--", lw=1.1, label="Alert threshold")
         for idx_event in event_idx:
             ax_r.axvspan(idx_event - 0.35, idx_event + 0.35, color="#fecaca", alpha=0.5)
         ax_r.set_xticks(x)
         ax_r.set_xticklabels(x_labels, rotation=20, ha="right")
         ax_r.set_ylim(0, max(0.35, float(sub[["TeacherHead_Prob", "Landmark_Signal", "FuseBest_Prob"]].to_numpy().max()) + 0.08))
         ax_r.set_ylabel("Predicted probability")
-        ax_r.set_title(f"Cumulative risk={case_row['proba']:.3f}")
+        ax_r.set_title(f"Patient-level cumulative risk = {case_row['proba']:.3f}")
         ax_r.grid(alpha=0.25)
         ax_r.legend(frameon=False, loc="upper left", ncol=2)
 
@@ -462,7 +617,7 @@ def plot_patient_q1q4_ci(patient_fit, patient_te):
     summary = pd.DataFrame(rows)
     summary.to_csv(OUT_DIR / "TeacherFrozenFuse_Patient_Q1Q4_CI.csv", index=False)
 
-    fig, ax = plt.subplots(figsize=(8.4, 5.4))
+    fig, ax = plt.subplots(figsize=(8.8, 5.6))
     x = np.arange(len(summary))
     yerr = np.vstack(
         [
@@ -470,18 +625,60 @@ def plot_patient_q1q4_ci(patient_fit, patient_te):
             summary["Observed_CI_High"] - summary["Observed"],
         ]
     )
-    bars = ax.bar(x, summary["Observed"], color="#60a5fa", alpha=0.9, yerr=yerr, capsize=4, label="Observed relapse rate")
-    ax.plot(x, summary["Predicted"], marker="o", lw=2, color="#f59e0b", label="Mean predicted risk")
-    for xi, n in zip(x, summary["N"].tolist()):
-        ax.text(xi, float(summary.loc[xi, "Observed"]) + 0.03, f"n={n}", ha="center", fontsize=9)
+    bar_fill = "#8fb9e8"
+    bar_edge = "#4c78a8"
+    obs_ci = "#1d4ed8"
+    pred_line = "#d97706"
+
+    ax.bar(
+        x,
+        summary["Observed"],
+        width=0.56,
+        color=bar_fill,
+        edgecolor=bar_edge,
+        linewidth=1.0,
+        alpha=0.95,
+        zorder=2,
+    )
+    obs_handle = ax.errorbar(
+        x,
+        summary["Observed"],
+        yerr=yerr,
+        fmt="o",
+        color=obs_ci,
+        mfc="white",
+        mec=obs_ci,
+        ms=4.8,
+        elinewidth=1.6,
+        capsize=4,
+        capthick=1.6,
+        label="Observed relapse rate (Wilson 95% CI)",
+        zorder=4,
+    )
+    pred_handle = ax.plot(
+        x,
+        summary["Predicted"],
+        marker="o",
+        ms=6.2,
+        mfc="white",
+        mec=pred_line,
+        mew=1.4,
+        lw=2.2,
+        color=pred_line,
+        label="Mean predicted risk",
+        zorder=5,
+    )[0]
     ax.set_xticks(x)
-    ax.set_xticklabels(summary["Risk_Group"])
-    ax.set_ylim(0, min(1.0, float(max(summary["Observed_CI_High"].max(), summary["Predicted"].max())) + 0.12))
-    ax.set_xlabel("Train-set quartile risk groups")
+    ax.set_xticklabels([f"{grp}\n{events}/{n}" for grp, events, n in zip(summary["Risk_Group"], summary["Events"], summary["N"])])
+    ax.set_ylim(0, min(1.0, float(max(summary["Observed_CI_High"].max(), summary["Predicted"].max())) + 0.14))
+    ax.set_xlabel("Train-set quartile risk groups (relapses/total)")
     ax.set_ylabel("Patient-level relapse probability")
-    ax.set_title("Patient-Level Risk Stratification with 95% CI")
-    ax.grid(axis="y", alpha=0.25)
-    ax.legend(frameon=False)
+    ax.set_title("Patient-Level Risk Stratification with Wilson 95% CI")
+    ax.grid(axis="y", alpha=0.22)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(handles=[obs_handle, pred_handle], frameon=False, loc="upper left")
+    ax.margins(x=0.06)
     fig.tight_layout()
     fig.savefig(OUT_DIR / "TeacherFrozenFuse_Patient_Q1Q4_CI.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -977,7 +1174,7 @@ def main():
     save_patient_risk_strata(patient_fit, patient_te, OUT_DIR / "TeacherFrozenFuse_Patient_Risk_Q1Q4.png")
     plot_patient_waterfall(patient_te, bins)
     plot_patient_risk_heatmap(df_te, te_proba, patient_te)
-    typical_df = select_typical_patients(patient_te)
+    typical_df = select_typical_patients(df_te, patient_te)
     plot_typical_patients(df_te, te_pred_df, typical_df)
     plot_patient_q1q4_ci(patient_fit, patient_te)
     plot_leadtime_warning(df_te, te_proba, patient_te)

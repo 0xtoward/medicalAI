@@ -140,11 +140,51 @@ def _save_summary_plot(explanation, X_plot, out_path, title, max_display=20, plo
     plt.close()
 
 
+def _swap_label_order(text):
+    if not text:
+        return text
+    if " = " in text:
+        left, right = text.split(" = ", 1)
+        if left and right:
+            return f"{right.strip()} = {left.strip()}"
+    if "=" in text:
+        left, right = text.split("=", 1)
+        if left and right:
+            return f"{right.strip()} = {left.strip()}"
+    return text
+
+
+def _flip_waterfall_equals(fig):
+    for ax in fig.axes:
+        ticklabels = ax.get_yticklabels()
+        if not ticklabels:
+            continue
+        raw_labels = [label.get_text() for label in ticklabels]
+        half = len(raw_labels) // 2
+        if half and any(" = " in text or "=" in text for text in raw_labels[:half]):
+            new_labels = [_swap_label_order(text) for text in raw_labels[:half]] + [""] * (len(raw_labels) - half)
+            ax.set_yticks(ax.get_yticks())
+            ax.set_yticklabels(new_labels)
+            fig.canvas.draw()
+            major = ax.yaxis.get_majorticklabels()
+            for idx, tick in enumerate(major):
+                if idx < half:
+                    tick.set_color("#111827")
+                else:
+                    tick.set_color((0, 0, 0, 0))
+        else:
+            new_labels = [_swap_label_order(text) for text in raw_labels]
+            if any(new != old for new, old in zip(new_labels, raw_labels)):
+                ax.set_yticks(ax.get_yticks())
+                ax.set_yticklabels(new_labels)
+
+
 def _save_local_plot(explanation, sample_idx, out_path, title, max_display=12):
     try:
         shap.plots.waterfall(explanation[sample_idx], max_display=max_display, show=False)
         fig = plt.gcf()
         fig.set_size_inches(9.5, 6.2)
+        _flip_waterfall_equals(fig)
     except Exception:
         plt.close("all")
         plt.figure(figsize=(12, 3.6))

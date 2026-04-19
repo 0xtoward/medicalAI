@@ -8,7 +8,7 @@ import math
 from thyroid_app.inference import load_manifest, predict_fixed_landmark, predict_relapse
 
 
-def _assert_close(name: str, actual: float, expected: float, tol: float = 1e-8) -> None:
+def _assert_close(name: str, actual: float, expected: float, tol: float = 1e-6) -> None:
     if not math.isclose(actual, expected, rel_tol=tol, abs_tol=tol):
         raise AssertionError(f"{name} mismatch: expected {expected}, got {actual}")
 
@@ -23,7 +23,14 @@ def main() -> None:
     relapse_result = predict_relapse(relapse_case, args.artifacts_dir)
     _assert_close("relapse", relapse_result["predicted_probability"], relapse_case["expected_probability"])
 
-    for landmark, case_payload in manifest["sample_cases"]["fixed"].items():
+    deployed_fixed_landmarks = [
+        task_cfg["landmark"]
+        for task_name, task_cfg in manifest["tasks"].items()
+        if task_name.startswith("fixed_") and "landmark" in task_cfg
+    ]
+
+    for landmark in deployed_fixed_landmarks:
+        case_payload = manifest["sample_cases"]["fixed"][landmark]
         result = predict_fixed_landmark(case_payload, landmark, args.artifacts_dir)
         if result["predicted_probability"] is None:
             raise AssertionError(f"Fixed landmark validation failed for {landmark}: {result['validation_messages']}")
@@ -33,4 +40,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -1,5 +1,0 @@
-Component,Scope,Variant,Best_Candidate,PR_AUC,AUC,Brier
-g2_nh,nonhyper,g2_pca_manifold,deep_g2_nh_nofs_raw,0.30095503072236995,0.8212757180425927,0.06472629402509462
-g3_n,normal,g3_cluster_soft_state,deep_g3_n_nofs_cal_interval,0.23132449304275907,0.7838910947249007,0.06734913525710025
-g4_nh,nonhyper,g4_residual_pca,deep_g4_nh_nofs_cal_phase,0.249884767283636,0.7994637240241325,0.067272632270443
-g4_n,normal,g4_residual_pca,deep_g4_n_nofs_cal_interval,0.2671415240024641,0.8041045738152942,0.0659039485807941

@@ -252,7 +252,7 @@ def save_patient_risk_strata(train_patient_df, test_patient_df, out_path):
 
     summary = (
         strat_df.groupby("Risk_Group")
-        .agg(N=("Y", "size"), Observed=("Y", "mean"), Predicted=("proba", "mean"))
+        .agg(N=("Y", "size"), Events=("Y", "sum"), Observed=("Y", "mean"), Predicted=("proba", "mean"))
         .reindex(labels)
         .reset_index()
     )
@@ -260,8 +260,12 @@ def save_patient_risk_strata(train_patient_df, test_patient_df, out_path):
     fig, ax = plt.subplots(figsize=(8, 5.5))
     bars = ax.bar(summary["Risk_Group"], summary["Observed"], color="cornflowerblue", alpha=0.85, label="Observed relapse rate")
     ax.plot(summary["Risk_Group"], summary["Predicted"], marker="o", lw=2, color="darkorange", label="Mean predicted risk")
-    for bar, n in zip(bars, summary["N"].fillna(0).astype(int)):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01, f"n={n}", ha="center", fontsize=9)
+    for bar, events, n in zip(
+        bars,
+        summary["Events"].fillna(0).astype(int),
+        summary["N"].fillna(0).astype(int),
+    ):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01, f"{events}/{n}", ha="center", fontsize=9)
     ax.set_ylim(0, min(1.0, float(np.nanmax([summary["Observed"].max(), summary["Predicted"].max()]) + 0.12)))
     ax.set_title("Patient-Level Risk Stratification (Q1-Q4)")
     ax.set_xlabel("Risk groups from train-set quartiles")

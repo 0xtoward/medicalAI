@@ -1,6 +1,0 @@
-original_features=9
-selected_features=9
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=Champion_Prob, Direct_Logit, fusion_committee_g34_StdLogit, Champion_minus_Direct, Direct_minus_committee_g34, Window_18M->24M_x_Direct_Logit, Window_1M->3M_x_Direct_Logit, Window_3M->6M_x_Direct_Logit, fusion_committee_g34_Direct_x_LatentMean
-note=multilogit fusion over Champion,Direct,committee_g34; feature_selection=True

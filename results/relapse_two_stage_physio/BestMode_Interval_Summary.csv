@@ -1,9 +1,0 @@
-Level,Metric,Value,CI_95
-Interval,AUC,0.8509255917083485,"[0.801, 0.900]"
-Interval,PR_AUC,0.3501424998328119,"[0.228, 0.496]"
-Interval,Brier,0.06303513094206555,"[0.045, 0.081]"
-Interval,Recall,0.6829268292682927,"[0.545, 0.829]"
-Interval,Specificity,0.8224101479915433,"[0.793, 0.852]"
-Interval,Calibration_Intercept,0.7447738628045296,"[0.031, 1.552]"
-Interval,Calibration_Slope,1.4680530253572284,"[1.130, 1.992]"
-Interval,Threshold,0.14999999999999997,

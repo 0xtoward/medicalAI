@@ -1,5 +1,0 @@
-original_features=13
-selected_features=8
-best_c=0.05
-cv_pr_auc=0.252397
-selected_feature_names=P_next_hyper, P_next_normal, NextState_Entropy, Pred_Delta_FT3, Pred_Delta_logTSH, Pred_Std_logTSH, Pred_FT4_Margin_To_Hyper, Pred_logTSH_Margin_To_Hyper

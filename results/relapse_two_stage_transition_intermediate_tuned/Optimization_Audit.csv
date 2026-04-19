@@ -1,6 +1,0 @@
-Optimization,Used,Detail
-direct_anchor_sweep,True,"direct_ref, direct_windowed, direct_monotonic"
-sidecar_feature_selection,True,nofs and L1-selected sidecar branches
-calibration_sweep,True,"global, phase, interval intercept strategies"
-stage1_scope_sweep,True,normal and nonhyper stage-1 training scopes
-auxiliary_sidecar_fusion,True,main-latent+aux-champion and main-champion+aux-latent

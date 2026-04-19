@@ -1,9 +1,0 @@
-Candidate,Base_Type,Feature_Selection,Calibration,Best_Model,PR_AUC,AUC,Brier,Threshold,Note
-deep_fusion_sep_g234_nofs_raw,raw,False,none,Logistic Reg.,0.32051248061520415,0.8458722219357501,0.06689519821203305,0.09,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_nofs_cal_global,calibrated,False,global,Calibrated,0.32051248061520415,0.8458722219357501,0.0980127243789,0.09999999999999999,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_nofs_cal_phase,calibrated,False,phase,Calibrated,0.31511678542042676,0.8389109472490075,0.08260941416340638,0.10999999999999999,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_fs_raw,raw,True,none,Elastic LR,0.3138671341697981,0.8404578971793946,0.06599817523330138,0.09999999999999999,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_fs_cal_global,calibrated,True,global,Calibrated,0.3138671341697981,0.8404578971793946,0.06970337574668033,0.10999999999999999,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_nofs_cal_interval,calibrated,False,interval,Calibrated,0.3124726295045144,0.8388593822513277,0.07651493055611869,0.11999999999999998,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_fs_cal_phase,calibrated,True,phase,Calibrated,0.3104559225113456,0.8368483473418243,0.06848924369331043,0.10999999999999999,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"
-deep_fusion_sep_g234_fs_cal_interval,calibrated,True,interval,Calibrated,0.3040265623729283,0.8360233073789511,0.0677666467581249,0.12999999999999998,"multilogit fusion over Champion,Direct,g2_nh,g3_n,g4_nh"

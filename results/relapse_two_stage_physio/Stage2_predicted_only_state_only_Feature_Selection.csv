@@ -1,5 +1,0 @@
-feature,coefficient,abs_coefficient,selected
-P_next_hyper,,,True
-NextState_Entropy,,,True
-NextState_MaxProb,,,True
-Pred_HyperEvidence,,,True

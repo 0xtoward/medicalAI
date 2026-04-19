@@ -1,3 +1,0 @@
-feature,coef,abs_coef,family,pretty_feature,odds_ratio,is_active,direction,family_order
-Direct_Score,0.12049005300348958,0.12049005300348958,Other,Direct Score,1.128049520205317,True,Risk up,6
-Physio_Score,0.11095521578861609,0.11095521578861609,Other,Physio Score,1.1173448663252716,True,Risk up,6

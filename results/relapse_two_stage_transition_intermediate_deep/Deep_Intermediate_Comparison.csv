@@ -1,3 +1,0 @@
-Reference,Group,PR_AUC,AUC,Delta_PR_AUC_vs_Current,Delta_AUC_vs_Current
-tuned_intermediate_best,nonhyper_g4_residual_pca_windowed_mainChampion_auxLatent,0.3513992004742935,0.8481410818336513,-0.00017649683685877493,-0.0012375599443098517
-transition_best,direct_windowed_core_plus_champion_calibrated,0.3512269429351875,0.8487082968081268,-4.239297752783866e-06,-0.001804774918785279

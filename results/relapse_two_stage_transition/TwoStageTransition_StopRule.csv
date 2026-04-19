@@ -1,5 +1,0 @@
-Group,PR_AUC_Gain_vs_Champion,AUC_Not_Down,Brier_Not_Worse,Calibration_Not_Worse,Improved_Window_Count,Bootstrap_CI_Low_vs_Champion,Bootstrap_CI_RightShift,Pass_Count,Pass_StopRule
-champion_sidecar_calibrated,0.000745181942359785,False,True,True,0,-0.004179070006456243,True,3,True
-direct_windowed_core,-0.0025106544768218053,True,True,True,3,-0.01852512544481476,False,4,True
-direct_windowed_core_plus_champion_calibrated,0.0026764991479227285,False,True,False,3,-0.002537212898684528,True,3,True
-stage1_nonhyper_scope_plus_champion_calibrated,-0.016008990794562195,False,True,True,2,-0.04769305117121052,False,3,True

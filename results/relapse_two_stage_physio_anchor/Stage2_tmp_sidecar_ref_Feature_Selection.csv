@@ -1,7 +1,0 @@
-feature,coefficient,abs_coefficient,selected
-P_next_hyper,,,True
-NextState_MaxProb,,,True
-Pred_FT4_Margin_To_Hyper,,,True
-Pred_logTSH_Margin_To_Hyper,,,True
-Pred_AnyHyperZone,,,True
-Pred_HyperEvidence,,,True

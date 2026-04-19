@@ -1,6 +1,0 @@
-original_features=39
-selected_features=39
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=Latent_Delta_FT3, Latent_Uncertainty_FT3, Latent_SignAgreement_FT3, Latent_Next_FT3, Latent_NextMinusHistMean_FT3, Latent_NextZ_FT3, Latent_Delta_FT4, Latent_Uncertainty_FT4, Latent_SignAgreement_FT4, Latent_Next_FT4, Latent_NextMinusHistMean_FT4, Latent_NextZ_FT4, Latent_Delta_logTSH, Latent_Uncertainty_logTSH, Latent_SignAgreement_logTSH, Latent_Next_logTSH, Latent_NextMinusHistMean_logTSH, Latent_NextZ_logTSH, Latent_DeltaNorm, Latent_UncertaintyNorm, Latent_ForecastAgreement, Latent_FT4_minus_logTSH, Latent_FT4_over_logTSH_abs, Latent_Delta_FT4_x_Window_1M->3M, Latent_Delta_FT4_x_Window_3M->6M, Latent_Delta_FT4_x_Window_6M->12M, Latent_Delta_FT4_x_Window_HighRisk, Latent_Delta_logTSH_x_Window_1M->3M, Latent_Delta_logTSH_x_Window_3M->6M, Latent_Delta_logTSH_x_Window_6M->12M, Latent_Delta_logTSH_x_Window_HighRisk, Latent_DeltaNorm_x_Window_1M->3M, Latent_DeltaNorm_x_Window_3M->6M, Latent_DeltaNorm_x_Window_6M->12M, Latent_DeltaNorm_x_Window_HighRisk, Latent_UncertaintyNorm_x_Window_1M->3M, Latent_UncertaintyNorm_x_Window_3M->6M, Latent_UncertaintyNorm_x_Window_6M->12M, Latent_UncertaintyNorm_x_Window_HighRisk
-note=continuous physiology forecast geometry only; no state/rule target proxy

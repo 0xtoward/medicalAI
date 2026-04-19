@@ -1,5 +1,0 @@
-original_features=51
-selected_features=36
-best_c=NA_reuse
-cv_pr_auc=NA_reuse
-selected_feature_names=Ever_Hypo_Before, Time_In_Normal, Prev_State_2, ThyroidW, FT3_Current, FT4_Mean_ToDate, FT3_Baseline, FT4_Current, Start_Time, logTSH_STD_ToDate, Delta_TSH_k0, Height, FT3_Prev, logTSH_Mean_ToDate, Exophthalmos, Interval_Name_1M->3M, MaxUptake, Interval_Name_6M->12M, TGAb, Interval_Name_12M->18M, TPOAb, FT3_STD_ToDate, logTSH_Baseline, HalfLife, Age, Event_Order, Prior_Relapse_Count, Ever_Hyper_Before, Uptake24h, Delta_TSH_1step, logTSH_Current, RAI3d, Stop_Time, Dose, Sex, FT3_Mean_ToDate

@@ -1,2 +1,0 @@
-Variant,Family,AUC,PR_AUC,Brier,Recall,Specificity,Calibration_Intercept,Calibration_Slope,Threshold,Epochs,Aux_Target,Calibration_Mode,Round,StopRule_Hits
-c2_anchor_slope_mid,c2,0.8435002320424896,0.32474600596449044,0.07151276220401957,0.6341463414634146,0.813953488372093,-0.8315690060320313,0.8920073533062838,0.20999999999999996,47,full,none,Round4,2

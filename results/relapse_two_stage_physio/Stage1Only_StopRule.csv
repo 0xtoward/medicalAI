@@ -1,6 +1,0 @@
-Group,PR_AUC_Gain_vs_Reference,AUC_Not_Down,Brier_Not_Worse,Calibration_Not_Worse,Pass_Count,Pass_StopRule
-binary_interval_intercept,-0.01929243323693014,False,True,False,1,False
-binary_interval_slope,-0.020023151203499123,False,True,True,2,True
-binary_early_late,-0.016024929731774384,False,True,True,2,True
-binary_interval_intercept_calibrated,-0.005186454754473935,True,True,True,3,True
-binary_rule_aux,-0.021429639537999867,False,True,False,1,False

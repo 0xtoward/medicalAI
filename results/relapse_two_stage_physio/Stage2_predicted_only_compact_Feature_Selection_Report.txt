@@ -1,6 +1,0 @@
-original_features=10
-selected_features=10
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=P_next_hyper, NextState_Entropy, NextState_MaxProb, Pred_HyperEvidence, Pred_Delta_FT4, Pred_Delta_logTSH, Pred_FT4_Margin_To_Hyper, Pred_logTSH_Margin_To_Hyper, Pred_Std_FT4, Pred_Std_logTSH
-note=fixed compact handoff

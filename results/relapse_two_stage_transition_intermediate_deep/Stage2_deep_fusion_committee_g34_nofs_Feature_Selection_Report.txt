@@ -1,6 +1,0 @@
-original_features=38
-selected_features=38
-best_c=NA_fixed
-cv_pr_auc=NA_fixed
-selected_feature_names=Champion_Logit, Champion_Prob, Direct_Logit, Direct_Prob, committee_g34_Logit, committee_g34_Prob, fusion_committee_g34_MeanLogit, fusion_committee_g34_StdLogit, fusion_committee_g34_MeanProb, fusion_committee_g34_MaxProb, Champion_x_Direct, Champion_minus_Direct, Champion_x_committee_g34, Champion_minus_committee_g34, Direct_x_committee_g34, Direct_minus_committee_g34, Window_12M->18M, Window_12M->18M_x_Champion_Logit, Window_12M->18M_x_Direct_Logit, Window_12M->18M_x_committee_g34_Logit, Window_18M->24M, Window_18M->24M_x_Champion_Logit, Window_18M->24M_x_Direct_Logit, Window_18M->24M_x_committee_g34_Logit, Window_1M->3M, Window_1M->3M_x_Champion_Logit, Window_1M->3M_x_Direct_Logit, Window_1M->3M_x_committee_g34_Logit, Window_3M->6M, Window_3M->6M_x_Champion_Logit, Window_3M->6M_x_Direct_Logit, Window_3M->6M_x_committee_g34_Logit, Window_6M->12M, Window_6M->12M_x_Champion_Logit, Window_6M->12M_x_Direct_Logit, Window_6M->12M_x_committee_g34_Logit, fusion_committee_g34_Champion_x_LatentMean, fusion_committee_g34_Direct_x_LatentMean
-note=multilogit fusion over Champion,Direct,committee_g34; feature_selection=False
