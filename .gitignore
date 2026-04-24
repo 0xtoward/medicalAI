@@ -45,8 +45,7 @@ results/*
 !results/fixed_landmark_binary/
 !results/relapse_teacher_frozen_fuse/
 
-# 早期探索 artifacts 与重跑缓存
-artifacts/
+# 早期探索重跑缓存
 artifacts_rerun_*/
 
 # 过程性 draft 与已从正文中移除的早期方法学总览图
